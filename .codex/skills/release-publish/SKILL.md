@@ -1,3 +1,18 @@
+---
+name: release-publish
+description: |
+  发布 Tauri 桌面应用新版本，处理版本号同步、Git tag、GitHub Actions 构建、Release 仓库产物同步、Cloudflare R2 上传、update.json 生成、自动更新发布和文档站重建。
+
+  触发场景：
+  - 需要发布新版本或 release
+  - 需要打 tag、推送发布分支或触发 CI 构建
+  - 需要生成或更新 update.json
+  - 需要处理 Tauri updater 签名产物
+  - 需要同步 R2 CDN、GitHub/Gitee release 仓库或发布安装包
+
+  触发词：发布、release、版本发布、推送、打Tag、update.json、签名构建、安装包、自动更新、R2、CDN
+---
+
 # 发布更新
 
 ## 概述
