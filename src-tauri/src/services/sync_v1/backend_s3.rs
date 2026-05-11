@@ -252,4 +252,24 @@ impl SyncBackendImpl for S3Backend {
             }
         }
     }
+
+    fn list_attachment_hashes(&self) -> Result<Vec<String>, AppError> {
+        let prefix = self.key("attachments/");
+        let bucket = &self.bucket;
+        let pages = block_on(async move { bucket.list(prefix, None).await })
+            .map_err(|e| AppError::Custom(format!("S3 list attachments 失败: {}", e)))?;
+        let mut hashes = Vec::new();
+        for page in pages {
+            for obj in page.contents {
+                // obj.key = "<prefix>attachments/aa/bb/<hash>" → 取最后一段
+                if let Some(name) = obj.key.rsplit('/').next() {
+                    if name.is_empty() || name.starts_with('_') {
+                        continue;
+                    }
+                    hashes.push(name.to_string());
+                }
+            }
+        }
+        Ok(hashes)
+    }
 }

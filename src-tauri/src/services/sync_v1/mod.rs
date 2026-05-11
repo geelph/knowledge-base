@@ -10,6 +10,7 @@
 //! V1 阶段刻意**不动**老 `services/sync.rs`（V0 整库 ZIP）—— 老用户继续兼容；
 //! 用户在设置里选 V1 后才走这里。
 
+pub mod attachment_gc;
 pub mod attachment_scan;
 pub mod backend;
 pub mod backend_local;

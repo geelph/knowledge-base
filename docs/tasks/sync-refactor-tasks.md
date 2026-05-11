@@ -338,11 +338,27 @@
   - 笔记编辑器/渲染器按 hash 反查 `find_attachment_path_by_hash`，sync_in/<hash>.<ext> 作为 fallback
   - 设置页加"重建附件索引"按钮调用新 Command
 
-#### T-S025 · 孤儿附件 GC（可选）
+#### T-S025 · 孤儿附件 GC
 
-- **状态**：`pending`
+- **状态**：`completed` · 完成日期：2026-05-11
 - **价值**：⭐⭐⭐  成本：低（0.5 天）
 - **依赖**：T-S024
+- **方案**：宽限期标记机制 —— 首次发现孤儿只打标记到远端 `attachments/_gc_marks.json`，
+  满 7 天（`GC_GRACE_DAYS`）仍是孤儿才真删；一旦又被引用就移除标记
+- **子任务**：
+  - [x] `backend.rs` trait 加 `list_attachment_hashes()` 方法 + 默认空实现
+  - [x] `backend_local.rs`：walkdir `attachments/`，过滤 `_` 开头文件
+  - [x] `backend_s3.rs`：`bucket.list(prefix=attachments/)`，取 key 最后一段
+  - [x] `backend_webdav.rs`：暂用默认空实现（递归 PROPFIND 待后续，WebDAV GC 当前 no-op）
+  - [x] `services/sync_v1/attachment_gc.rs`：`gc_attachments(db, backend) -> GcResult`
+    - 远端 hash 清单 - 远端 manifest 引用 hash = 孤儿（用远端 manifest 保守，避免本地索引不全误删）
+    - 远端无 manifest 时直接放弃 GC（不删不标记）
+    - 标记文件用 `backend.get_note/put_note` 读写 `attachments/_gc_marks.json`
+  - [x] Command `sync_v1_gc_attachments(backend_id)` + 注册 lib.rs
+  - [x] `models::SyncGcResult` (TS) + `syncV1Api.gcAttachments` + SyncV1Section "清理孤儿附件"按钮（遍历所有 backend）
+  - [x] 单测 5 个：ts 解析 / marks serde / 端到端宽限+删除 / 重新引用移除标记 / 无 manifest no-op
+  - [x] 全 lib 197 个单测通过；Rust 零警告；TS 编译零错误
+- **顺手修复**：`manifest.rs` 测试里 `n_active` → `_n_active`（消 unused 警告）
 
 ---
 ### Phase 4 · 并发提速（1-2 天）

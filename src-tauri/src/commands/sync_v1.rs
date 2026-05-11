@@ -184,6 +184,32 @@ pub fn sync_v1_rebuild_attachment_index(state: State<'_, AppState>) -> Result<us
         .map_err(|e: AppError| e.to_string())
 }
 
+/// T-S025: 清理远端孤儿附件
+///
+/// 列出指定 backend 的远端 `attachments/` 下所有附件，与远端 manifest 引用的 hash 算差集，
+/// 孤儿走"7 天宽限期标记 → 超期才删"流程。
+///
+/// 返回 GcResult（删除数 / 新标记数 / 移除标记数 / 远端附件总数 / 错误清单）。
+///
+/// 注意：
+/// - 仅 Local / S3 backend 支持（list_attachment_hashes 已实现）；WebDAV 当前 no-op
+/// - 远端无 manifest 时为安全起见不删任何东西
+#[tauri::command]
+pub fn sync_v1_gc_attachments(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<crate::services::sync_v1::attachment_gc::GcResult, String> {
+    let cfg = state
+        .db
+        .get_sync_backend(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("backend {} 不存在", id))?;
+    let auth = backend::parse_auth(cfg.kind, &cfg.config_json).map_err(|e| e.to_string())?;
+    let backend_impl = backend::create_backend(auth).map_err(|e| e.to_string())?;
+    crate::services::sync_v1::attachment_gc::gc_attachments(&state.db, backend_impl.as_ref())
+        .map_err(|e: AppError| e.to_string())
+}
+
 /// 取本机 hostname（短名）；失败返回 "unknown-host"
 fn hostname_short() -> String {
     // hostname crate 已是项目依赖（services/sync.rs 用了 hostname::get）

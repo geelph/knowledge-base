@@ -145,6 +145,29 @@ impl SyncBackendImpl for LocalPathBackend {
         let rel = super::backend::cas_path(hash);
         Ok(self.resolve(&rel).exists())
     }
+
+    fn list_attachment_hashes(&self) -> Result<Vec<String>, AppError> {
+        let root = self.resolve("attachments");
+        if !root.exists() {
+            return Ok(vec![]);
+        }
+        let mut hashes = Vec::new();
+        for entry in walkdir::WalkDir::new(&root).into_iter().flatten() {
+            if !entry.path().is_file() {
+                continue;
+            }
+            let name = match entry.path().file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            // 过滤特殊文件（_gc_marks.json 等）
+            if name.starts_with('_') {
+                continue;
+            }
+            hashes.push(name.to_string());
+        }
+        Ok(hashes)
+    }
 }
 
 #[cfg(test)]

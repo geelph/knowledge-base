@@ -82,6 +82,7 @@ import type {
   SyncManifestV1,
   SyncPushResult,
   SyncPullResult,
+  SyncGcResult,
   ResolvedDataDir,
   MigrationMarker,
   WordExportResult,
@@ -785,6 +786,10 @@ export const syncV1Api = {
   /// 返回成功 upsert 的引用数（不存在的文件被跳过且不计入）
   rebuildAttachmentIndex: () =>
     invoke<number>("sync_v1_rebuild_attachment_index"),
+  /// T-S025: 清理远端孤儿附件（远端有但 manifest 不引用的 hash，7 天宽限后删）
+  /// 仅 Local/S3 backend 支持；WebDAV 当前 no-op
+  gcAttachments: (id: number) =>
+    invoke<SyncGcResult>("sync_v1_gc_attachments", { id }),
 };
 
 /**

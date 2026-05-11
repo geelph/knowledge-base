@@ -993,6 +993,10 @@ export interface SyncPushResult {
   uploaded: number;
   deletedRemote: number;
   skipped: number;
+  /** T-S024: 上传的附件数（远端原先没有，本机新传） */
+  attachmentsUploaded?: number;
+  /** T-S024: 跳过的附件数（has_attachment=true，远端已存在） */
+  attachmentsSkipped?: number;
   errors: string[];
 }
 
@@ -1000,6 +1004,22 @@ export interface SyncPullResult {
   downloaded: number;
   deletedLocal: number;
   conflicts: number;
+  /** T-S024: 下载的附件数（远端 manifest 列了但本机没有的） */
+  attachmentsDownloaded?: number;
+  errors: string[];
+}
+
+/** T-S025: 孤儿附件 GC 结果 */
+export interface SyncGcResult {
+  /** 本次真删除的孤儿附件数（超过宽限期） */
+  deleted: number;
+  /** 本次新打标记的孤儿数（还在宽限期内，未删） */
+  newlyMarked: number;
+  /** 之前被标记但现在又被引用 → 移除标记的数量 */
+  unmarked: number;
+  /** 远端 attachments/ 下的附件总数 */
+  remoteTotal: number;
+  /** 单个文件删除失败的错误清单 */
   errors: string[];
 }
 

@@ -122,6 +122,16 @@ pub trait SyncBackendImpl {
     /// 用于 push 前的差集计算（避免重复上传）。性能关键：尽量用 HEAD/HeadObject 等
     /// 不传输数据的探测方式。
     fn has_attachment(&self, hash: &str) -> Result<bool, AppError>;
+
+    /// T-S025：列出远端 `attachments/` 目录下所有附件文件名（即 hash）
+    ///
+    /// 用于 GC：远端有但 manifest 没引用的 hash = 孤儿。
+    /// 默认实现返回空（backend 不支持递归列举时不报错，只是不能 GC，如 WebDAV）。
+    ///
+    /// 实现约定：必须过滤掉以 `_` 开头的特殊文件（如 `_gc_marks.json`）。
+    fn list_attachment_hashes(&self) -> Result<Vec<String>, AppError> {
+        Ok(vec![])
+    }
 }
 
 /// 从 sync_backends.config_json 解析为 BackendAuth

@@ -172,6 +172,7 @@ export function SyncV1Section() {
   const [shareEnv, setShareEnv] = useState<Envelope | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [rebuildingIndex, setRebuildingIndex] = useState(false);
+  const [gcRunning, setGcRunning] = useState(false);
 
   // T-S024: 重建附件索引 —— 扫描所有笔记 content 中的本地资产引用并 upsert 到 note_attachments
   async function handleRebuildAttachmentIndex() {
@@ -183,6 +184,31 @@ export function SyncV1Section() {
       message.error(`重建附件索引失败：${e}`);
     } finally {
       setRebuildingIndex(false);
+    }
+  }
+
+  // T-S025: 清理远端孤儿附件 —— 对所有同步源依次跑 GC（7 天宽限期标记 → 超期才删）
+  async function handleGcAttachments() {
+    if (backends.length === 0) {
+      message.info("还没有同步源");
+      return;
+    }
+    setGcRunning(true);
+    try {
+      let deleted = 0;
+      let marked = 0;
+      for (const b of backends) {
+        const r = await syncV1Api.gcAttachments(b.id);
+        deleted += r.deleted;
+        marked += r.newlyMarked;
+      }
+      message.success(
+        `孤儿附件清理完成：删除 ${deleted} 个，新标记 ${marked} 个（满 7 天后下次清理时删除）`,
+      );
+    } catch (e) {
+      message.error(`清理孤儿附件失败：${e}`);
+    } finally {
+      setGcRunning(false);
     }
   }
 
@@ -456,6 +482,15 @@ export function SyncV1Section() {
               onClick={handleRebuildAttachmentIndex}
             >
               重建附件索引
+            </Button>
+          </Tooltip>
+          <Tooltip title="清理远端 attachments/ 下已无笔记引用的孤儿文件。首次发现的孤儿会先标记，满 7 天再删（防误删）。仅本地路径 / S3 同步源支持。">
+            <Button
+              size="small"
+              loading={gcRunning}
+              onClick={handleGcAttachments}
+            >
+              清理孤儿附件
             </Button>
           </Tooltip>
           <Tooltip title="从 JSON / 二维码导入同步源">

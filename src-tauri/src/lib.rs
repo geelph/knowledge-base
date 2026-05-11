@@ -939,6 +939,7 @@ pub fn run() {
             commands::sync_v1::sync_v1_pull,
             commands::sync_v1::sync_v1_get_local_manifest,
             commands::sync_v1::sync_v1_rebuild_attachment_index,
+            commands::sync_v1::sync_v1_gc_attachments,
             // 文件夹模块
             commands::folders::create_folder,
             commands::folders::rename_folder,

@@ -600,7 +600,7 @@ mod tests {
         use crate::models::NoteInput;
         let db = Database::init(":memory:").unwrap();
 
-        let n_active = db
+        let _n_active = db
             .create_note(&NoteInput {
                 title: "活的".into(),
                 content: "x".into(),
