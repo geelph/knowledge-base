@@ -369,12 +369,13 @@ def build(base):
                 'signature': read_sig(f'{RELEASE_DIR}/Knowledge.Base_{VERSION}_amd64.AppImage.tar.gz.sig'),
             },
             # Android arm64 —— App 内"检查更新"(check_mobile_update) 读这个 url 拿 APK 直链。
-            # 不放 signature（Android 自己验 APK 签名，不用 minisign）。
-            # 前提：本版本已跑过 android.yml release 构建（推 v{VERSION}-mobile.0 tag 触发），
-            # 产物 Knowledge.Base_{VERSION}_android-arm64.apk 已附到 bkywksj/knowledge-base 的 Release。
+            # 不放 signature（Android 自己验 APK 签名，不用 minisign）。URL 跟其他平台一样走
+            # 公开 release 仓 raw / R2（源码仓是私有的，releases/download 下不动）—— 所以 APK 也要
+            # 放进 releases/v{VERSION}/ 一起 push（步骤 7b 的 WANT 里加一行 Knowledge.Base_{VERSION}_android-arm64.apk）。
+            # 前提：本版本已跑过 android.yml release 构建（推 v{VERSION}-mobile.0 tag 触发）。
             # 若本版本没出 Android 包，就把这一项删掉（check_mobile_update 会回落到 release 发布页）。
             'android-arm64': {
-                'url': f'https://github.com/bkywksj/knowledge-base/releases/download/v{VERSION}-mobile.0/Knowledge.Base_{VERSION}_android-arm64.apk',
+                'url': f'{base}/Knowledge.Base_{VERSION}_android-arm64.apk',
             },
         },
     }
