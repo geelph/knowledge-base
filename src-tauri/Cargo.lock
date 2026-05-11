@@ -3073,7 +3073,6 @@ dependencies = [
  "urlencoding",
  "uuid",
  "walkdir",
- "winreg 0.55.0",
  "zeroize",
  "zip 2.4.2",
 ]

@@ -110,13 +110,6 @@ calamine = "0.28"
 # 移动端按 T-M013 后再决策）
 docx-rs = "0.4"
 
-# ─── Windows 专属依赖 ────────────────────────────────────
-[target.'cfg(windows)'.dependencies]
-# 读 Windows 系统代理（HKCU\...\Internet Settings\ProxyServer）。Clash 等"系统代理"开关
-# 写在注册表里、不设 HTTP_PROXY 环境变量，reqwest 默认读不到 —— 部署在 CGNAT/公网地址的
-# Ollama 必须经这个代理才能到达。winreg 0.55 已在 lockfile 里（Tauri 间接依赖），不增加体积。
-winreg = "0.55"
-
 # ─── 编译优化 ────────────────────────────────────
 
 [profile.dev]
