@@ -32,6 +32,7 @@ import {
   Pin,
   PinOff,
   Inbox,
+  GitCompare,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { FolderFilled } from "@ant-design/icons";
@@ -45,6 +46,7 @@ import { parseEmojiPrefix } from "@/lib/treeIcons";
 import { NewNoteButton } from "@/components/NewNoteButton";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { TemplatePickerModal } from "@/components/TemplatePickerModal";
+import { NoteComparePicker } from "@/components/editor/NoteComparePicker";
 import {
   createBlankAndOpen,
   importPdfsFlow,
@@ -395,6 +397,9 @@ export function NotesPanel() {
 
   // 右键"从模板…"弹窗状态：folderId=null 表示尚未打开
   const [templatePickerFolder, setTemplatePickerFolder] = useState<number | null>(null);
+
+  // 右键"与另一篇笔记对比…"：第一篇笔记 id；null = 未打开
+  const [compareFirstNoteId, setCompareFirstNoteId] = useState<number | null>(null);
 
   // 外部点击 / Esc 关闭由 ContextMenuOverlay 内部自管，无需在此挂监听
 
@@ -1086,6 +1091,15 @@ export function NotesPanel() {
               .writeText(`[[${name}]]`)
               .then(() => message.success("已复制"))
               .catch((err) => message.error(String(err)));
+            close();
+          },
+        },
+        {
+          key: "compare-with-note",
+          icon: <GitCompare size={14} />,
+          label: "与另一篇笔记对比…",
+          onClick: () => {
+            setCompareFirstNoteId(noteId);
             close();
           },
         },
@@ -1997,6 +2011,12 @@ export function NotesPanel() {
         open={templatePickerFolder !== null}
         folderId={templatePickerFolder}
         onClose={() => setTemplatePickerFolder(null)}
+      />
+
+      {/* 右键"与另一篇笔记对比…" */}
+      <NoteComparePicker
+        firstNoteId={compareFirstNoteId}
+        onClose={() => setCompareFirstNoteId(null)}
       />
     </div>
   );
