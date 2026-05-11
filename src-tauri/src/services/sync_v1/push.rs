@@ -269,58 +269,96 @@ pub fn push<R: Runtime, E: Emitter<R>>(
         });
     }
 
-    // T-S031：批量并发上传（backend 可 override，WebDAV 用 Semaphore=8 并发）
+    // T-S031 + 进度/限流加固：**分小批**上传 —— 每批传完就报一次进度（进度条一格一格走，
+    // 不再"全传完才一口气报"卡在 0%），并按上一批的表现**自适应调并发**（撞 5xx → 下批减半；干净 → 下批 +2；范围 [1,8]）。
     if !pending.is_empty() {
+        let total = pending.len();
         let _ = emitter.emit(
             event_name,
             ProgressEvent {
                 backend_id,
                 phase: "upload-batch".into(),
                 current: 0,
-                total: pending.len(),
-                message: format!("批量上传 {} 条笔记…", pending.len()),
+                total,
+                message: format!("批量上传 {} 条笔记…", total),
             },
         );
 
-        let batch_items: Vec<(String, String)> = pending
-            .iter()
-            .map(|p| (p.remote_path.clone(), p.body.clone()))
-            .collect();
-        let batch_results = backend.batch_put_notes(&batch_items);
+        const CHUNK: usize = 10; // 每批条数：进度更新粒度（95 篇 → ~10 次更新）
+        let mut max_conc: usize = 4; // 初始并发；按 5xx 自适应
+        let mut done: usize = 0;
+        let mut start = 0usize;
+        'chunks: while start < pending.len() {
+            let end = (start + CHUNK).min(pending.len());
+            let chunk = &pending[start..end];
+            let chunk_items: Vec<(String, String)> = chunk
+                .iter()
+                .map(|p| (p.remote_path.clone(), p.body.clone()))
+                .collect();
+            let chunk_results = backend.batch_put_notes(&chunk_items, max_conc);
 
-        // 按结果迭代：更新 state + 发 per-item 完成事件（粒度回到 per-note）
-        for (i, (p, r)) in pending.iter().zip(batch_results.into_iter()).enumerate() {
-            let _ = emitter.emit(
-                event_name,
-                ProgressEvent {
-                    backend_id,
-                    phase: "upload".into(),
-                    current: i + 1,
-                    total: pending.len(),
-                    message: format!("已传 {}", p.title),
-                },
-            );
-            match r {
-                Ok(_) => {
-                    if let Err(e) = db.upsert_remote_state(
+            // backend 在"整批致命错误"（如远端目录创建失败）时会返回比入参更短的 Vec → 视为已中止：
+            // 记一条错误，停掉后续 chunk（再试也是一样的错）。
+            if chunk_results.len() < chunk.len() {
+                let abort_msg = chunk_results
+                    .into_iter()
+                    .next()
+                    .and_then(|r| r.err())
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "远端不可用".into());
+                result
+                    .errors
+                    .push(format!("批量上传已中止（剩余 {} 条未上传）：{}", total - done, abort_msg));
+                break 'chunks;
+            }
+
+            let mut chunk_had_5xx = false;
+            for (p, r) in chunk.iter().zip(chunk_results.into_iter()) {
+                done += 1;
+                let _ = emitter.emit(
+                    event_name,
+                    ProgressEvent {
                         backend_id,
-                        p.note_id,
-                        &p.remote_path,
-                        &p.content_hash,
-                        &p.updated_at,
-                        false,
-                    ) {
-                        result.errors.push(format!(
-                            "upsert sync_remote_state 失败 (note {}): {}",
-                            p.note_id, e
-                        ));
+                        phase: "upload".into(),
+                        current: done,
+                        total,
+                        message: format!("已传 {}", p.title),
+                    },
+                );
+                match r {
+                    Ok(_) => {
+                        if let Err(e) = db.upsert_remote_state(
+                            backend_id,
+                            p.note_id,
+                            &p.remote_path,
+                            &p.content_hash,
+                            &p.updated_at,
+                            false,
+                        ) {
+                            result.errors.push(format!(
+                                "upsert sync_remote_state 失败 (note {}): {}",
+                                p.note_id, e
+                            ));
+                        }
+                        result.uploaded += 1;
                     }
-                    result.uploaded += 1;
-                }
-                Err(e) => {
-                    result.errors.push(format!("上传失败 {}: {}", p.title, e));
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if super::backend_webdav::is_transient_server_err(&msg) {
+                            chunk_had_5xx = true;
+                        }
+                        result.errors.push(format!("上传失败 {}: {}", p.title, msg));
+                    }
                 }
             }
+
+            // 自适应并发：这一批撞过 5xx → 减半（最少 1）；干净 → +2（最多 8）
+            max_conc = if chunk_had_5xx {
+                (max_conc / 2).max(1)
+            } else {
+                (max_conc + 2).min(8)
+            };
+            start = end;
         }
     }
 

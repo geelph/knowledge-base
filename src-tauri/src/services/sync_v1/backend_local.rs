@@ -297,7 +297,7 @@ mod tests {
             ("notes/c.md".into(), "# C\nbody c".into()),
         ];
 
-        let results = backend.batch_put_notes(&items);
+        let results = backend.batch_put_notes(&items, 4);
         assert_eq!(results.len(), 3, "结果数与入参一一对应");
         assert!(results.iter().all(|r| r.is_ok()), "全部应成功: {:?}", results);
 
@@ -308,7 +308,7 @@ mod tests {
         }
 
         // 空数组
-        let empty = backend.batch_put_notes(&[]);
+        let empty = backend.batch_put_notes(&[], 4);
         assert!(empty.is_empty());
 
         let _ = fs::remove_dir_all(&dir);

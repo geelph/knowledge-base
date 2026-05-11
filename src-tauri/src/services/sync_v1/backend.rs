@@ -89,13 +89,21 @@ pub trait SyncBackendImpl {
     /// 上传一条笔记的 .md 文本到远端 `path`（path 是相对 vault 根的 posix 路径）
     fn put_note(&self, path: &str, content: &str) -> Result<(), AppError>;
 
-    /// T-S030: 批量上传笔记 `.md` 文本（默认实现 = 串行调 put_note）
+    /// T-S030: 批量上传笔记 `.md` 文本
     ///
-    /// 返回值与入参一一对应，第 i 个结果对应第 i 个 item。
+    /// 返回值通常与入参一一对应（第 i 个结果对应第 i 个 item）；但实现允许在"整批
+    /// 致命错误"（如远端目录创建失败）时**提前中止**并返回更短的 Vec（甚至 1 个元素 = 那条错误），
+    /// 调用方需按 `min(results.len(), items.len())` 处理，并把"返回长度 < 入参长度"理解为"已中止"。
     ///
-    /// 性能 backend 可 override（如 WebDAV/S3 用并发上传）。默认实现保持串行
-    /// 行为兼容；T-S031 起 WebdavBackend 自带 Semaphore(8) 并发实现。
-    fn batch_put_notes(&self, items: &[(String, String)]) -> Vec<Result<(), AppError>> {
+    /// `max_concurrency`：建议并发数（仅对支持并发的 backend 有意义；默认串行实现忽略它）。
+    /// 调用方可据此做自适应限流（撞限流就调小、顺畅就调大）。
+    ///
+    /// 性能 backend 可 override（如 WebDAV 用 Semaphore 并发上传 + 退避重试）。
+    fn batch_put_notes(
+        &self,
+        items: &[(String, String)],
+        _max_concurrency: usize,
+    ) -> Vec<Result<(), AppError>> {
         items
             .iter()
             .map(|(path, content)| self.put_note(path, content))

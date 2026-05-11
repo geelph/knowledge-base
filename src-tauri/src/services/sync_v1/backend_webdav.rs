@@ -63,9 +63,14 @@ impl SyncBackendImpl for WebdavBackend {
     /// 上传速度 vs 服务器限流（nginx `limit_req` 触发 → 503）之间取平衡：
     ///   1. 先把所有要写入的父目录 MKCOL **一遍**（不是每篇都来一次）→ 请求数砍一半；撞 5xx 退避重试一次，
     ///      仍失败 → 整批中止，返回一条清晰的"服务器繁忙/限流"错误（避免几十行 503 HTML）。
-    ///   2. 目录就绪后逐条 PUT（`put_into_existing_dir`，不再 MKCOL），**4 路并发**（8 路太猛、易触发限流）。
+    ///   2. 目录就绪后逐条 PUT（`put_into_existing_dir`，不再 MKCOL），并发数由调用方给（`max_concurrency`，
+    ///      调用方按"撞限流就调小、顺畅就调大"自适应）；至少 1 路。
     ///   3. 单条 PUT 撞 5xx（限流/网关）时**指数退避重试**（共 3 次：立即 / +1s / +3s）→ 偶发限流自愈，不直接判失败。
-    fn batch_put_notes(&self, items: &[(String, String)]) -> Vec<Result<(), AppError>> {
+    fn batch_put_notes(
+        &self,
+        items: &[(String, String)],
+        max_concurrency: usize,
+    ) -> Vec<Result<(), AppError>> {
         if items.is_empty() {
             return vec![];
         }
@@ -120,8 +125,8 @@ impl SyncBackendImpl for WebdavBackend {
             return vec![Err(AppError::Custom(condensed))];
         }
 
-        // ── 2. 4 路并发逐条 PUT（目录已就绪，不再 MKCOL）；单条撞 5xx 指数退避重试 ──
-        let sem = Arc::new(Semaphore::new(4));
+        // ── 2. 并发逐条 PUT（目录已就绪，不再 MKCOL）；单条撞 5xx 指数退避重试 ──
+        let sem = Arc::new(Semaphore::new(max_concurrency.max(1)));
         let owned: Vec<(String, String)> = items.to_vec();
         block_on(async move {
             let mut handles = Vec::with_capacity(owned.len());
@@ -218,7 +223,7 @@ impl SyncBackendImpl for WebdavBackend {
 
 /// 错误信息看着像"服务器繁忙 / 限流 / 网关挂了"这类**临时性 5xx**吗？
 /// 用于决定要不要退避重试 + 给用户一条"过会儿再试"而不是一坨 503 HTML。
-fn is_transient_server_err(msg: &str) -> bool {
+pub(crate) fn is_transient_server_err(msg: &str) -> bool {
     msg.contains("503")
         || msg.contains("502")
         || msg.contains("504")
