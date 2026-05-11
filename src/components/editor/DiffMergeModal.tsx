@@ -84,24 +84,64 @@ function sideExtensions(editable: boolean, dark: boolean) {
   ];
 }
 
-/** 两侧 .cm-scroller 按比例镜像 scrollTop；返回清理函数 */
-function linkScrollers(a: HTMLElement, b: HTMLElement, enabledRef: React.MutableRefObject<boolean>) {
-  let lock = false;
-  const mirror = (src: HTMLElement, dst: HTMLElement) => {
-    if (!enabledRef.current || lock) return;
-    lock = true;
-    const srcMax = src.scrollHeight - src.clientHeight;
-    const dstMax = dst.scrollHeight - dst.clientHeight;
-    dst.scrollTop = srcMax > 0 ? (src.scrollTop / srcMax) * dstMax : 0;
-    requestAnimationFrame(() => {
-      lock = false;
-    });
+/**
+ * 管理两侧 `.cm-scroller` 的联动：
+ *  - `enabledRef.current === true`（同步）：哪侧滚就把另一侧镜像到同一 scrollTop（MergeView 用 spacer
+ *    把对齐行放在同一 Y，所以直接复制 scrollTop 就是行对齐的）。
+ *  - `enabledRef.current === false`（不同步）：CodeMirror 的 MergeView **自带内部滚动同步**，关不掉，
+ *    所以这里反向抵消它 —— 鼠标在哪一栏就让哪一栏自由滚，把另一栏钉回它自己的位置。
+ *
+ * 用 `suppressUntil` 时间窗忽略"我们自己改 scrollTop 触发的 scroll 事件"，避免来回弹。
+ */
+function linkScrollers(a: HTMLElement, b: HTMLElement, syncRef: React.MutableRefObject<boolean>) {
+  let hovered: HTMLElement | null = null;
+  let suppressUntil = 0;
+  const savedTop = new Map<HTMLElement, number>([
+    [a, a.scrollTop],
+    [b, b.scrollTop],
+  ]);
+  const now = () => performance.now();
+
+  const onEnterA = () => {
+    hovered = a;
   };
-  const onA = () => mirror(a, b);
-  const onB = () => mirror(b, a);
+  const onEnterB = () => {
+    hovered = b;
+  };
+  a.addEventListener("mouseenter", onEnterA);
+  b.addEventListener("mouseenter", onEnterB);
+
+  const handle = (self: HTMLElement, other: HTMLElement) => () => {
+    if (now() < suppressUntil) return;
+    if (syncRef.current) {
+      // 同步：自己 → 对面（CM 已用 spacer 对齐，直接复制）
+      suppressUntil = now() + 50;
+      other.scrollTop = self.scrollTop;
+      savedTop.set(self, self.scrollTop);
+      savedTop.set(other, other.scrollTop);
+      return;
+    }
+    // 不同步：
+    if (hovered === self || hovered == null) {
+      // 这是用户在 self 上滚 → 记住 self 的新位置，把 other 钉回去（抵消 CM 内部同步）
+      savedTop.set(self, self.scrollTop);
+      suppressUntil = now() + 50;
+      other.scrollTop = savedTop.get(other) ?? 0;
+    } else {
+      // 鼠标不在 self 上却滚了 → 是 CM 同步过来的副作用，撤销
+      suppressUntil = now() + 50;
+      self.scrollTop = savedTop.get(self) ?? 0;
+    }
+  };
+
+  const onA = handle(a, b);
+  const onB = handle(b, a);
   a.addEventListener("scroll", onA, { passive: true });
   b.addEventListener("scroll", onB, { passive: true });
+
   return () => {
+    a.removeEventListener("mouseenter", onEnterA);
+    b.removeEventListener("mouseenter", onEnterB);
     a.removeEventListener("scroll", onA);
     b.removeEventListener("scroll", onB);
   };
