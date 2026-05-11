@@ -12,12 +12,14 @@ import { DiffMergeModal, type DiffSide } from "./DiffMergeModal";
 import { tidyNoteMarkdown } from "./markdownDiffUtil";
 
 interface Props {
-  /** 第一篇笔记 id（来自列表右键）；为 null 时本组件不渲染任何东西 */
+  /** 第一篇笔记 id；为 null 时本组件不渲染任何东西 */
   firstNoteId: number | null;
+  /** 第二篇 id；提供则跳过选择器直接进合并视图（列表多选两篇用） */
+  secondNoteId?: number | null;
   onClose: () => void;
 }
 
-export function NoteComparePicker({ firstNoteId, onClose }: Props) {
+export function NoteComparePicker({ firstNoteId, secondNoteId, onClose }: Props) {
   const { message } = AntdApp.useApp();
 
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -32,7 +34,21 @@ export function NoteComparePicker({ firstNoteId, onClose }: Props) {
   const baseARef = useRef<string>("");
   const baseBRef = useRef<string>("");
 
-  // firstNoteId 变化 → 拉第一篇 + 打开选择器
+  // 用两篇笔记进合并视图（tidy markdown + 记录 base 用于"只写改动过的一侧"）
+  const startMerge = useCallback((a: Note, b: Note) => {
+    noteARef.current = a;
+    noteBRef.current = b;
+    const aMd = tidyNoteMarkdown(a.content);
+    const bMd = tidyNoteMarkdown(b.content);
+    baseARef.current = aMd;
+    baseBRef.current = bMd;
+    setLeft({ label: a.title || `笔记 #${a.id}`, value: aMd, editable: true });
+    setRight({ label: b.title || `笔记 #${b.id}`, value: bMd, editable: true });
+    setPickerOpen(false);
+    setMergeOpen(true);
+  }, []);
+
+  // firstNoteId 变化 → 拉第一篇；给了 secondNoteId 就直接对比，否则打开选择器
   useEffect(() => {
     if (firstNoteId == null) return;
     (async () => {
@@ -43,15 +59,25 @@ export function NoteComparePicker({ firstNoteId, onClose }: Props) {
           onClose();
           return;
         }
-        noteARef.current = a;
-        setPickerOpen(true);
+        if (secondNoteId != null) {
+          const b = await noteApi.get(secondNoteId);
+          if (b.is_encrypted) {
+            message.warning("所选笔记中有已加密的，无法在此对比");
+            onClose();
+            return;
+          }
+          startMerge(a, b);
+        } else {
+          noteARef.current = a;
+          setPickerOpen(true);
+        }
       } catch (e) {
         message.error(`打开笔记失败：${e}`);
         onClose();
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstNoteId]);
+  }, [firstNoteId, secondNoteId]);
 
   const loadOptions = useCallback(
     async (keyword?: string) => {
@@ -85,15 +111,7 @@ export function NoteComparePicker({ firstNoteId, onClose }: Props) {
         message.warning("该笔记已加密，无法在此对比");
         return;
       }
-      noteBRef.current = b;
-      const aMd = tidyNoteMarkdown(a.content);
-      const bMd = tidyNoteMarkdown(b.content);
-      baseARef.current = aMd;
-      baseBRef.current = bMd;
-      setLeft({ label: a.title || `笔记 #${a.id}`, value: aMd, editable: true });
-      setRight({ label: b.title || `笔记 #${b.id}`, value: bMd, editable: true });
-      setPickerOpen(false);
-      setMergeOpen(true);
+      startMerge(a, b);
     } catch (e) {
       message.error(`打开笔记失败：${e}`);
     }

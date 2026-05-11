@@ -557,8 +557,8 @@ function DesktopNoteListPage() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   /** 批量移动 Popover 的开关 */
   const [batchMoveOpen, setBatchMoveOpen] = useState(false);
-  /** 「对比所选」入口：打开时填第一篇 id（第二篇在选择器里再确认）；null = 未打开 */
-  const [compareFirstId, setCompareFirstId] = useState<number | null>(null);
+  /** 「对比」入口：选 1 篇 → second=null（弹选择器选第二篇）；选 2 篇 → second 已填（直接对比）；null = 未打开 */
+  const [compareNotes, setCompareNotes] = useState<{ first: number; second: number | null } | null>(null);
 
   const folderId = searchParams.get("folder");
 
@@ -1395,12 +1395,23 @@ function DesktopNoteListPage() {
               <Button size="small" icon={<ChevronDown size={12} />} title="更多导出格式" />
             </Dropdown>
           </Space.Compact>
-          {selectedIds.length === 2 && (
-            <Tooltip title="并排对比这两篇笔记（打开后从下拉框确认第二篇），可逐块合并、各自保存">
+          {(selectedIds.length === 1 || selectedIds.length === 2) && (
+            <Tooltip
+              title={
+                selectedIds.length === 2
+                  ? "并排对比所选的这两篇笔记，可逐块合并、各自保存"
+                  : "对比这篇与另一篇笔记（打开后选第二篇），可逐块合并、各自保存"
+              }
+            >
               <Button
                 size="small"
                 icon={<GitCompare size={14} />}
-                onClick={() => setCompareFirstId(selectedIds[0])}
+                onClick={() =>
+                  setCompareNotes({
+                    first: selectedIds[0],
+                    second: selectedIds.length === 2 ? selectedIds[1] : null,
+                  })
+                }
               >
                 对比
               </Button>
@@ -1847,10 +1858,11 @@ function DesktopNoteListPage() {
         />
       </Modal>
 
-      {/* 「对比所选两篇」合并视图（在选择器里确认第二篇） */}
+      {/* 「对比」合并视图：选 1 篇→弹选择器选第二篇；选 2 篇→直接对比 */}
       <NoteComparePicker
-        firstNoteId={compareFirstId}
-        onClose={() => setCompareFirstId(null)}
+        firstNoteId={compareNotes?.first ?? null}
+        secondNoteId={compareNotes?.second ?? null}
+        onClose={() => setCompareNotes(null)}
       />
     </div>
   );
