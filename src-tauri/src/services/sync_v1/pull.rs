@@ -6,9 +6,10 @@
 //! 3. diff
 //! 4. 对 to_pull：从 backend.get_note 拉 .md 文本 → 解析 title + body → upsert 到本地
 //! 5. 对 to_delete_local：软删本地笔记（v1 不实际删，仅 set is_deleted=1）
-//! 6. 冲突 (conflicts)：v1 用 last-write-wins —— 落败方写到本地 `.conflicts/<sid>_<ts>.md` 文件
-//!
-//! 本机时间相同（极小概率）→ 两边都标 conflict，UI 提示用户人工合并。
+//! 6. 冲突 (conflicts)：默认 last-write-wins（按 updated_at 较新者赢）。两种情况会把远端版本
+//!    落到 `<app_data>/sync_conflicts/backend_<id>/<sid>_<ts>.md`，本地保持原样、等用户在设置页合并：
+//!      a) 双方 updated_at 完全相同但内容 hash 不同（manifest diff 的 `conflicts` 集合，极小概率）
+//!      b) T-S051：本地有未推送改动 + 远端也改了（to_pull 里 `is_divergence` 检测命中）
 
 use std::path::Path;
 
@@ -206,6 +207,18 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
         }
     }
 
+    // T-S051: 分歧检测准备数据
+    //  - local_hash_by_uuid：本地每条笔记的当前内容 hash（用 stable_uuid 索引）
+    //  - remote_states：本地与该 backend 的同步状态（含 last_synced_hash = 上次同步时的内容 hash）
+    // 若一条笔记在 to_pull 里（远端较新），但本地当前 hash 已偏离 last_synced（说明本地也改过了），
+    // 且与远端 hash 也不同 → 双方各改各的 → 不静默覆盖本地，而是把远端版本落冲突文件等用户合并。
+    let local_hash_by_uuid: std::collections::HashMap<&str, &str> = local
+        .entries
+        .iter()
+        .map(|e| (e.stable_id.as_str(), e.content_hash.as_str()))
+        .collect();
+    let remote_states = db.list_remote_state(backend_id)?;
+
     // ── 处理 to_pull（远端独有 / 远端较新）
     let total_pull = diff.to_pull.len();
     for (idx, entry) in diff.to_pull.iter().enumerate() {
@@ -289,15 +302,48 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
 
         // T-S011：entry.stable_id 现在是 UUID（v36）。先按 stable_uuid 查本地 → 决定 update/create
         let local_id_for_state = match db.get_note_id_by_stable_uuid(&entry.stable_id)? {
-            Some(local_id) => match db.update_note(local_id, &input) {
-                Ok(_) => Some(local_id),
-                Err(e) => {
-                    result
-                        .errors
-                        .push(format!("更新本地笔记失败 {}: {}", entry.title, e));
-                    None
+            Some(local_id) => {
+                // T-S051: 分歧检测 —— 本地有未推送改动且与远端各不相同 → 不覆盖，落冲突文件保留本地
+                let diverged = is_divergence(
+                    local_hash_by_uuid.get(entry.stable_id.as_str()).copied(),
+                    remote_states.get(&local_id).map(|s| s.last_synced_hash.as_str()),
+                    &entry.content_hash,
+                );
+                if diverged {
+                    if let Err(e) = std::fs::create_dir_all(conflicts_dir) {
+                        result
+                            .errors
+                            .push(format!("创建冲突目录失败 {}: {}", conflicts_dir.display(), e));
+                    }
+                    let safe_id = entry.stable_id.replace('/', "_");
+                    let path = conflicts_dir.join(format!(
+                        "{}_{}.md",
+                        safe_id,
+                        entry.updated_at.replace([':', ' '], "-")
+                    ));
+                    match std::fs::write(&path, &body) {
+                        Ok(_) => {
+                            result.conflicts += 1;
+                            log::warn!(
+                                "[sync_v1] 笔记 {} 本地/远端各改各的，已把远端版本落冲突文件 {}，本地保留",
+                                entry.title,
+                                path.display()
+                            );
+                        }
+                        Err(e) => result.errors.push(format!("写冲突文件失败: {}", e)),
+                    }
+                    continue; // 不 update_note、不 upsert_remote_state → 保留本地，等用户在设置页解决
                 }
-            },
+                match db.update_note(local_id, &input) {
+                    Ok(_) => Some(local_id),
+                    Err(e) => {
+                        result
+                            .errors
+                            .push(format!("更新本地笔记失败 {}: {}", entry.title, e));
+                        None
+                    }
+                }
+            }
             None => {
                 // 本地没有 → 用远端 UUID 创建（保持多端 ID 稳定）
                 match db.create_note_with_uuid(&input, &entry.stable_id) {
@@ -401,6 +447,18 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
     Ok(result)
 }
 
+/// T-S051: 判定一条 to_pull 笔记是否"本地远端各改各的"
+///
+/// 条件：本地当前 hash 已知 + 上次同步 hash 已知 + 本地 ≠ 上次同步（本地有未推送改动）
+///       + 本地 ≠ 远端（远端确实带来了不同内容）→ 真分歧。
+/// 任一信息缺失（如该笔记从未同步过、本地刚 create）→ 不算分歧（按原 last-write-wins 走）。
+fn is_divergence(local_hash: Option<&str>, last_synced_hash: Option<&str>, remote_hash: &str) -> bool {
+    match (local_hash, last_synced_hash) {
+        (Some(lh), Some(ls)) => lh != ls && lh != remote_hash,
+        _ => false,
+    }
+}
+
 /// 解析 .md 文件：第一个 `# ` 行作为 title，其余作为 content
 ///
 /// 如解析不到 # 标题，回退到 manifest entry 里的 title + 全文作为 content
@@ -447,5 +505,18 @@ mod tests {
         let (t, c) = parse_note_md(body, "manifest 标题");
         assert_eq!(t, "manifest 标题");
         assert_eq!(c, "没有 H1 的正文");
+    }
+
+    #[test]
+    fn divergence_only_when_both_changed_and_differ() {
+        // 本地改了（≠ 上次同步），远端也带来不同内容（≠ 本地）→ 分歧
+        assert!(is_divergence(Some("localH"), Some("syncedH"), "remoteH"));
+        // 本地没改（== 上次同步）→ 不是分歧，正常 last-write-wins 拉远端
+        assert!(!is_divergence(Some("syncedH"), Some("syncedH"), "remoteH"));
+        // 本地改了，但改成的内容恰好和远端一样 → 不算分歧（只需更新时间戳）
+        assert!(!is_divergence(Some("sameH"), Some("syncedH"), "sameH"));
+        // 该笔记从未同步过 / 信息缺失 → 不算分歧
+        assert!(!is_divergence(Some("localH"), None, "remoteH"));
+        assert!(!is_divergence(None, Some("syncedH"), "remoteH"));
     }
 }

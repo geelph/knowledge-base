@@ -1023,6 +1023,37 @@ export interface SyncGcResult {
   errors: string[];
 }
 
+/** T-S051: 一条待解决的同步冲突（本地/远端各改各的那条笔记） */
+export interface SyncConflictItem {
+  /** 所属同步源 id */
+  backendId: number;
+  /** 同步源名字（"我的坚果云"等） */
+  backendName: string;
+  /** 笔记 stable_uuid */
+  stableId: string;
+  /** 本地笔记 id；本地已无此笔记 → null */
+  noteId: number | null;
+  /** 笔记标题 */
+  title: string;
+  /** 冲突文件绝对路径（resolve 时回传） */
+  conflictFilePath: string;
+  /** 冲突文件名（仅展示） */
+  conflictFileName: string;
+  /** 冲突文件创建时间（≈ 远端冲突版本被拉下来的时间），best-effort，可能为 null */
+  detectedAt: string | null;
+  /** 本地笔记当前正文（加密笔记 / 本地已无 → 空串） */
+  localContent: string;
+  /** 远端冲突版本正文（已去掉 # 标题前缀；加密笔记 → 空串） */
+  remoteContent: string;
+  /** 是否加密笔记（加密笔记不支持在此合并，UI 只给"忽略"） */
+  encrypted: boolean;
+  /** 本地是否已无此笔记（只能"用远端（重建）"或"忽略"） */
+  noteMissingLocally: boolean;
+}
+
+/** T-S051: 冲突解决方式 */
+export type SyncConflictResolution = "keep_local" | "use_remote" | "merged";
+
 export interface SyncV1ProgressEvent {
   backendId: number;
   /** "compute" | "diff" | "upload" | "download" | "manifest" | "apply" | "done" */

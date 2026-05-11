@@ -83,6 +83,8 @@ import type {
   SyncPushResult,
   SyncPullResult,
   SyncGcResult,
+  SyncConflictItem,
+  SyncConflictResolution,
   ResolvedDataDir,
   MigrationMarker,
   WordExportResult,
@@ -800,9 +802,22 @@ export const syncV1Api = {
   rebuildAttachmentIndex: () =>
     invoke<number>("sync_v1_rebuild_attachment_index"),
   /// T-S025: 清理远端孤儿附件（远端有但 manifest 不引用的 hash，7 天宽限后删）
-  /// 仅 Local/S3 backend 支持；WebDAV 当前 no-op
+  /// Local/S3/WebDAV 均支持（个别禁用 PROPFIND infinity 的 WebDAV 服务器自动跳过）
   gcAttachments: (id: number) =>
     invoke<SyncGcResult>("sync_v1_gc_attachments", { id }),
+  /// T-S051: 列出所有同步源待解决的冲突（本地/远端各改各的那条笔记）
+  listConflicts: () => invoke<SyncConflictItem[]>("sync_v1_list_conflicts"),
+  /// T-S051: 解决一条冲突。resolution: "keep_local" | "use_remote" | "merged"（merged 需带 mergedContent）
+  resolveConflict: (
+    conflictFilePath: string,
+    resolution: SyncConflictResolution,
+    mergedContent?: string,
+  ) =>
+    invoke<void>("sync_v1_resolve_conflict", {
+      conflictFilePath,
+      resolution,
+      mergedContent,
+    }),
 };
 
 /**

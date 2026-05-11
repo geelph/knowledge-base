@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import {
   Alert,
   App as AntdApp,
+  Badge,
   Button,
   Form,
   Input,
@@ -27,6 +28,7 @@ import {
   theme as antdTheme,
 } from "antd";
 import {
+  AlertTriangle,
   CloudDownload,
   CloudUpload,
   FolderOpen,
@@ -43,6 +45,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { configApi, syncApi, syncV1Api } from "@/lib/api";
 import { ShareConfigModal } from "@/components/config-share/ShareConfigModal";
 import { ImportConfigModal } from "@/components/config-share/ImportConfigModal";
+import { ConflictResolveModal } from "@/components/settings/ConflictResolveModal";
 import { exportWebDavBackend, type Envelope } from "@/lib/configShare";
 import type {
   SyncBackend,
@@ -173,6 +176,9 @@ export function SyncV1Section() {
   const [importOpen, setImportOpen] = useState(false);
   const [rebuildingIndex, setRebuildingIndex] = useState(false);
   const [gcRunning, setGcRunning] = useState(false);
+  // T-S051: 待处理冲突
+  const [conflictCount, setConflictCount] = useState(0);
+  const [conflictModalOpen, setConflictModalOpen] = useState(false);
 
   // T-S024: 重建附件索引 —— 扫描所有笔记 content 中的本地资产引用并 upsert 到 note_attachments
   async function handleRebuildAttachmentIndex() {
@@ -244,6 +250,7 @@ export function SyncV1Section() {
         const { ok, error, backendId } = e.payload;
         if (ok) {
           void loadBackends();
+          void loadConflictCount();
         } else {
           message.warning(`自动同步失败 (backend #${backendId})：${error ?? "未知错误"}`);
         }
@@ -259,7 +266,18 @@ export function SyncV1Section() {
 
   useEffect(() => {
     void loadBackends();
+    void loadConflictCount();
   }, []);
+
+  // T-S051: 刷新"待处理冲突"数量（用于按钮角标）
+  async function loadConflictCount() {
+    try {
+      const list = await syncV1Api.listConflicts();
+      setConflictCount(list.length);
+    } catch {
+      // 静默失败，不打扰
+    }
+  }
 
   async function loadBackends() {
     setLoading(true);
@@ -443,14 +461,15 @@ export function SyncV1Section() {
         modal.warning({ title: "拉取有错误", content: r.errors.join("\n") });
       } else if (r.conflicts > 0) {
         modal.warning({
-          title: `${r.conflicts} 条冲突`,
+          title: `${r.conflicts} 条冲突待处理`,
           content:
-            "落败的远端版本已写到 <数据目录>/sync_conflicts/backend_<id>/，请手动比对。",
+            "本地和远端各改了同一条笔记。点上方「冲突待处理」按钮可以并排对比、手动合并。",
         });
       } else {
         message.success(msg);
       }
       void loadBackends();
+      void loadConflictCount();
     } catch (e) {
       message.error(`拉取失败: ${e}`);
     } finally {
@@ -486,6 +505,20 @@ export function SyncV1Section() {
           已配置的同步源：每个同步源独立维护推送 / 拉取状态
         </span>
         <Space size={4}>
+          {conflictCount > 0 && (
+            <Tooltip title="本地和远端各改了同一条笔记，需要你来决定保留哪个版本（或手动合并）。">
+              <Badge count={conflictCount} size="small" offset={[-2, 2]}>
+                <Button
+                  size="small"
+                  danger
+                  icon={<AlertTriangle size={14} />}
+                  onClick={() => setConflictModalOpen(true)}
+                >
+                  冲突待处理
+                </Button>
+              </Badge>
+            </Tooltip>
+          )}
           <Tooltip title="扫描所有笔记的图片/PDF/source 引用并登记到附件同步索引。首次启用同步前、或批量导入笔记后请按一次。">
             <Button
               size="small"
@@ -886,6 +919,14 @@ export function SyncV1Section() {
         open={importOpen}
         onClose={() => setImportOpen(false)}
         onImported={() => void loadBackends()}
+      />
+      <ConflictResolveModal
+        open={conflictModalOpen}
+        onClose={() => {
+          setConflictModalOpen(false);
+          void loadConflictCount();
+        }}
+        onChanged={() => void loadConflictCount()}
       />
     </div>
   );

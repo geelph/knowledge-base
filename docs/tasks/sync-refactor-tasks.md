@@ -443,12 +443,21 @@
   - `SyncSection.tsx`：「加密备份（端到端）」区块 — Switch 开关 + 密码输入 + 保存/清除按钮；导出/导入/push/pull/快照恢复全部接通备份密码；导出按钮文案随状态切换；导入文件选择器支持 `.enc`
 - **验证**：`npx tsc --noEmit` 0 错误；`cargo check` 0 警告；208 lib 测试通过
 
-#### T-S051 · 冲突合并 UI（三栏 diff）
+#### T-S051 · 冲突解决 UI（双栏 diff + 手动合并）
 
-- **状态**：`pending`
-- **价值**：⭐⭐⭐  成本：高（2-3 天）
-- **依赖**：T-S013（合并 manifest 后）
-- **子任务**：基于 monaco-diff-editor 或 react-diff-viewer 做三栏（本地 / 远端 / 合并结果）
+- **状态**：✅ 完成 —— 2026-05-11
+- **价值**：⭐⭐⭐  成本：约 1.5 天
+- **决策**（已与用户确认）：**双栏（本地 / 远端）diff + 可编辑合并框**（不做三栏 —— 没存共同祖先 base，不值得为此加 schema 写放大）；diff 渲染引 `react-diff-viewer-continued`
+- **后端**：
+  - `services/sync_v1/conflicts.rs`（新）：`list_conflicts(db, app_data_dir)` 扫描 `sync_conflicts/backend_<id>/*.md` → `ConflictItem`（backendId/Name, stableId, noteId, title, conflictFilePath, detectedAt, localContent, remoteContent, encrypted, noteMissingLocally）；`resolve_conflict(db, app_data_dir, filePath, resolution, mergedContent)` —— 校验路径在 `sync_conflicts/` 下（canonicalize + starts_with），按 `KeepLocal`/`UseRemote`/`Merged` 写回笔记（`update_note` 重写一遍 → bump updated_at → 下次 push 本地胜出）+ 删冲突文件；加密笔记任何 resolution 都只删冲突文件（不在此合并）
+  - `commands/sync_v1.rs`：`sync_v1_list_conflicts` / `sync_v1_resolve_conflict` 两个 Command（用 `app.path().app_data_dir()` 对齐 `sync_v1_pull` 写冲突文件的基准目录）；`lib.rs` 注册
+  - `pull.rs` 兜底（修了一个真 bug）：`to_pull` 里本地笔记已存在时，先用 `is_divergence(本地当前hash, last_synced_hash, 远端hash)` 判定 —— 本地有未推送改动且与远端各不相同 → **不再静默 `update_note` 覆盖**，改为把远端版本落冲突文件、`result.conflicts++`、保留本地。补 `is_divergence` 纯函数单测
+- **前端**：
+  - `types`：`SyncConflictItem` / `SyncConflictResolution`（`"keep_local" | "use_remote" | "merged"`）；`syncV1Api.listConflicts()` / `resolveConflict(filePath, resolution, mergedContent?)`
+  - `components/settings/ConflictResolveModal.tsx`（新）：左侧冲突列表 + 右侧详情（`ReactDiffViewer` split view `compareMethod=WORDS` + 可编辑「合并结果」TextArea + 用本地/用远端/保存合并按钮）；加密笔记 → 只给「忽略」；本地已无此笔记 → 只给「用远端（重建）」/「忽略」；跟随 app 暗色主题
+  - `SyncV1Section.tsx`：toolbar 加「冲突待处理」按钮（Badge 计数，仅 count>0 时显示）；mount / 自动同步事件 / 手动 pull 后刷新计数；pull 结果弹窗文案改为引导点按钮
+- **验证**：`npx tsc --noEmit` 0 错误；`cargo check` 0 警告；`cargo test` 212 通过（新增 `is_divergence` + `conflicts.rs` 单测）；`pnpm build` 通过
+- **已知取舍**：无共同祖先 base，所以是双栏不是三栏；加密笔记冲突不在此处合并（密文）
 
 ---
 
@@ -492,8 +501,9 @@ Phase X (按需)        ──────► 端到端加密 / 冲突合并 UI
 - **Phase 5**：✅ 完成（T-S040）—— 2026-05-11
   - 收益：UI 文案区分"多端实时同步（推荐）"vs"快照归档"，V1 引导用户先重建附件索引
 
-- **Phase X · 可选增强**：T-S050（V0 快照端到端加密）✅ 完成 —— 2026-05-11
-  - 收益：导出/推送的归档快照可整块 AES-256-GCM 加密，云端只见密文；独立"备份密码"
+- **Phase X · 可选增强**：
+  - T-S050（V0 快照端到端加密）✅ 完成 —— 2026-05-11：导出/推送的归档快照可整块 AES-256-GCM 加密，云端只见密文；独立"备份密码"
+  - T-S025（V1 附件孤儿 GC）✅ 完成 —— 2026-05-11：宽限期标记 + 三端 backend（Local/S3/WebDAV）清理；前端「清理孤儿附件」按钮
+  - T-S051（V1 同步冲突解决 UI）✅ 完成 —— 2026-05-11：双栏 diff + 手动合并；顺带修了 pull 静默覆盖本地未推送改动的 bug
 
-🎉 **同步功能重构正式收官**。剩余 T-S025（V1 附件 GC，已部分落地）/T-S032（S3·Local 批量上传）/T-S051（冲突合并 UI）
-为可选增强项，不影响核心多端同步可用性，按需开启新任务即可。
+🎉 **同步功能重构全部完成**（含可选增强）。仅剩 T-S032（S3·Local 批量上传覆写，串行已够用、价值低）一个可选项未做。

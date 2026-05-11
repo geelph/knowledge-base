@@ -192,7 +192,7 @@ pub fn sync_v1_rebuild_attachment_index(state: State<'_, AppState>) -> Result<us
 /// 返回 GcResult（删除数 / 新标记数 / 移除标记数 / 远端附件总数 / 错误清单）。
 ///
 /// 注意：
-/// - 仅 Local / S3 backend 支持（list_attachment_hashes 已实现）；WebDAV 当前 no-op
+/// - Local / S3 / WebDAV 均支持（个别禁用 PROPFIND infinity 的 WebDAV 服务器会自动跳过）
 /// - 远端无 manifest 时为安全起见不删任何东西
 #[tauri::command]
 pub fn sync_v1_gc_attachments(
@@ -208,6 +208,42 @@ pub fn sync_v1_gc_attachments(
     let backend_impl = backend::create_backend(auth).map_err(|e| e.to_string())?;
     crate::services::sync_v1::attachment_gc::gc_attachments(&state.db, backend_impl.as_ref())
         .map_err(|e: AppError| e.to_string())
+}
+
+// ─── T-S051: 同步冲突解决 ──────────────────────────────────
+
+/// 列出所有同步源待解决的冲突（给设置页"冲突待处理"用）
+#[tauri::command]
+pub fn sync_v1_list_conflicts(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<crate::services::sync_v1::conflicts::ConflictItem>, String> {
+    // 冲突文件由 sync_v1_pull 写在 `app.path().app_data_dir()/sync_conflicts/` 下，
+    // 这里必须用同一个基准目录（注意：这是 framework 默认 app_data_dir，dev 模式下与 -dev 隔离目录不同；
+    // 若以后改了 sync_v1_pull 的 conflicts_dir 基准，本处需同步改）。
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    crate::services::sync_v1::conflicts::list_conflicts(&state.db, &base)
+        .map_err(|e: AppError| e.to_string())
+}
+
+/// 解决一条冲突：`keep_local`（保留本地）/ `use_remote`（采用远端）/ `merged`（采用手动合并结果）
+#[tauri::command]
+pub fn sync_v1_resolve_conflict(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    conflict_file_path: String,
+    resolution: crate::services::sync_v1::conflicts::ConflictResolution,
+    merged_content: Option<String>,
+) -> Result<(), String> {
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    crate::services::sync_v1::conflicts::resolve_conflict(
+        &state.db,
+        &base,
+        &conflict_file_path,
+        resolution,
+        merged_content.as_deref(),
+    )
+    .map_err(|e: AppError| e.to_string())
 }
 
 /// 取本机 hostname（短名）；失败返回 "unknown-host"
