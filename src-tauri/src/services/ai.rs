@@ -51,14 +51,49 @@ impl AiEventEmitter for ChatEmitter {
 
 pub struct AiService;
 
-/// 获取用于 Ollama 的 HTTP 客户端：始终绕过系统代理。
+/// 判断该 Ollama API 地址是否应**绕过系统代理**直连。
 ///
-/// Ollama 是本地 / 内网服务（localhost、127.0.0.1、192.168.x、10.x、Tailscale 100.64.0.0/10 等），
-/// 走 Clash 等系统 HTTP 代理只会被劫持导致连接失败。
+/// - `localhost` / 环回 `127.x` / RFC1918 私网（`192.168.x` `10.x` `172.16-31.x`）/ link-local
+///   `169.254.x` → **绕过代理**直连：本机能直连，强行走 Clash 等系统代理只会被劫持。
+/// - 其它（CGNAT `100.64.0.0/10`——Tailscale 等覆盖网络常用、公网 IP、域名）→ **不绕过**，
+///   走系统代理。原因：有用户把 Ollama 部署在这类地址（如 `http://100.100.100.100:11434`），
+///   这种地址往往**只有经系统代理 / VPN 隧道才能到达**，强行 `.no_proxy()` 直连会
+///   `error sending request`（连 TCP 都连不上）。让它走系统代理，由代理自己的规则决定直连还是转发。
 ///
-/// 返回全局单例引用，避免每次流式请求都重建连接池。
-fn build_ollama_client() -> &'static Client {
-    crate::services::http_client::shared_no_proxy()
+/// 解析不出 host（含没带 scheme 的输入会先补 `http://` 再试）→ 保守起见走系统代理。
+fn ollama_url_bypasses_proxy(api_url: &str) -> bool {
+    use std::net::IpAddr;
+    let url_str = if api_url.contains("://") {
+        api_url.to_string()
+    } else {
+        format!("http://{}", api_url.trim())
+    };
+    let Some(host) = reqwest::Url::parse(&url_str)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+    else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        // 注意：故意不把 CGNAT 100.64.0.0/10 当"内网"（不依赖 unstable 的 Ipv4Addr::is_shared）——见上方注释
+        Ok(IpAddr::V4(v4)) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        Ok(IpAddr::V6(v6)) => v6.is_loopback(), // v6 内网 Ollama 极罕见，只特判 ::1
+        Err(_) => false,                        // 域名 → 走系统代理（可能是远程 Ollama）
+    }
+}
+
+/// 获取用于 Ollama 的 HTTP 客户端。按 `api_url` 的 host 分流：
+/// 真·本地/内网地址 → 绕过系统代理直连；CGNAT / 公网 / 域名 → 走系统代理（见 `ollama_url_bypasses_proxy`）。
+/// 两者都返回全局单例引用，避免每次流式请求都重建连接池。
+fn build_ollama_client(api_url: &str) -> &'static Client {
+    if ollama_url_bypasses_proxy(api_url) {
+        crate::services::http_client::shared_no_proxy()
+    } else {
+        crate::services::http_client::shared_ollama_via_proxy()
+    }
 }
 
 /// 根据用户配置的 api_url 构造 OpenAI 兼容的 chat/completions 完整 URL。
@@ -553,8 +588,8 @@ impl AiService {
         let seed: u32 = rand::random();
         let timeout = std::time::Duration::from_secs(10);
         let raw = if model.provider == "ollama" {
-            let client = build_ollama_client();
             let url = format!("{}/api/chat", model.api_url.trim_end_matches('/'));
+            let client = build_ollama_client(&model.api_url);
             let response = client
                 .post(&url)
                 .timeout(timeout)
@@ -669,8 +704,8 @@ impl AiService {
         let started = std::time::Instant::now();
 
         if input.provider == "ollama" {
-            let client = build_ollama_client();
             let url = format!("{}/api/chat", input.api_url.trim_end_matches('/'));
+            let client = build_ollama_client(&input.api_url);
             let response = client
                 .post(&url)
                 .timeout(timeout)
@@ -755,7 +790,7 @@ impl AiService {
         mut cancel_rx: watch::Receiver<bool>,
     ) -> Result<String, AppError> {
         let url = format!("{}/api/chat", model.api_url.trim_end_matches('/'));
-        let client = build_ollama_client();
+        let client = build_ollama_client(&model.api_url);
         let response = client
             .post(&url)
             .json(&json!({
@@ -1145,7 +1180,7 @@ impl AiService {
         mut cancel_rx: watch::Receiver<bool>,
     ) -> Result<String, AppError> {
         let url = format!("{}/api/chat", model.api_url.trim_end_matches('/'));
-        let client = build_ollama_client();
+        let client = build_ollama_client(&model.api_url);
 
         let response = match client
             .post(&url)
@@ -1752,7 +1787,7 @@ impl AiService {
         mut cancel_rx: watch::Receiver<bool>,
     ) -> (Result<String, AppError>, Option<Vec<ToolCallAccum>>) {
         let url = format!("{}/api/chat", model.api_url.trim_end_matches('/'));
-        let client = build_ollama_client();
+        let client = build_ollama_client(&model.api_url);
 
         let mut request_body = json!({
             "model": model.model_id,

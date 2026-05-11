@@ -6,7 +6,9 @@
 //!
 //! 用 `OnceLock` 做进程级单例：
 //! - `shared()`：普通用途（OpenAI / Claude / WebDAV 等外网 HTTPS）
-//! - `shared_no_proxy()`：本地 / 内网服务（Ollama），强制绕过系统代理
+//! - `shared_no_proxy()`：真·本地/内网 Ollama（localhost / RFC1918 私网等），绕过系统代理
+//! - `shared_ollama_via_proxy()`：部署在 CGNAT / 公网 / 域名 上、需经系统代理隧道才能到达的
+//!   Ollama（带同样的 read_timeout）
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -15,6 +17,7 @@ use reqwest::Client;
 
 static SHARED: OnceLock<Client> = OnceLock::new();
 static SHARED_NO_PROXY: OnceLock<Client> = OnceLock::new();
+static SHARED_OLLAMA_VIA_PROXY: OnceLock<Client> = OnceLock::new();
 
 /// Ollama 流式响应"两次读之间"的空闲超时。
 ///
@@ -29,13 +32,29 @@ pub fn shared() -> &'static Client {
     SHARED.get_or_init(Client::new)
 }
 
-/// 不走系统代理的 Client，用于 Ollama 等本地/内网服务。
+/// 不走系统代理的 Client，用于真·本地/内网 Ollama（localhost / 127.x / 192.168.x / 10.x 等）。
 ///
-/// 带 120s `read_timeout`：避免 Ollama 加载大模型 / 服务挂死时流式请求永远 pending。
+/// 这类地址本机能直连，强行走 Clash 等系统代理只会被劫持；带 120s `read_timeout`：
+/// 避免 Ollama 加载大模型 / 服务挂死时流式请求永远 pending。
 pub fn shared_no_proxy() -> &'static Client {
     SHARED_NO_PROXY.get_or_init(|| {
         Client::builder()
             .no_proxy()
+            .read_timeout(OLLAMA_READ_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| Client::new())
+    })
+}
+
+/// 走系统代理的 Ollama Client，用于部署在 CGNAT 段（如 Tailscale 的 100.64.0.0/10）/ 公网 IP /
+/// 域名 上的 Ollama —— 这类地址往往**只有经系统代理（Clash 等）或 VPN 隧道才能到达**，
+/// `shared_no_proxy()` 直连会 `error sending request`（连 TCP 都连不上）。
+///
+/// 不调 `.no_proxy()`，reqwest 默认会读 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 环境变量；
+/// 由代理自己的规则决定直连还是转发。同样带 120s `read_timeout`。
+pub fn shared_ollama_via_proxy() -> &'static Client {
+    SHARED_OLLAMA_VIA_PROXY.get_or_init(|| {
+        Client::builder()
             .read_timeout(OLLAMA_READ_TIMEOUT)
             .build()
             .unwrap_or_else(|_| Client::new())
