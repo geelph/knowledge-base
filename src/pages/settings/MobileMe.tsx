@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { message } from "antd";
+import { message, Modal } from "antd";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Settings,
   Layers,
@@ -19,6 +20,7 @@ import {
   Plug,
   Info,
   ChevronRight,
+  RefreshCw,
 } from "lucide-react";
 import {
   systemApi,
@@ -26,6 +28,7 @@ import {
   trashApi,
   aiModelApi,
   promptApi,
+  mobileUpdateApi,
 } from "@/lib/api";
 import type { DashboardStats } from "@/types";
 
@@ -54,6 +57,55 @@ export function MobileMe() {
     modelCount: 0,
     promptCount: 0,
   });
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  /**
+   * 检查更新：拉 update.json 比对版本。移动端没法热替换，有新版只能引导用户去下载新 APK。
+   * 用户点"去下载" → openUrl(APK 直链/发布页) → 浏览器接管下载，下完点一下进系统安装器
+   * （首次会提示"允许安装未知应用"，那是浏览器的权限）。
+   */
+  async function handleCheckUpdate() {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    try {
+      const info = await mobileUpdateApi.check();
+      if (!info.has_update) {
+        message.success(`已是最新版本 v${info.current_version}`);
+        return;
+      }
+      Modal.confirm({
+        title: `发现新版本 v${info.latest_version}`,
+        content: (
+          <div className="text-sm">
+            <div className="mb-2 text-slate-500">
+              当前 v{info.current_version} → 最新 v{info.latest_version}
+            </div>
+            {info.notes && (
+              <div className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs text-slate-700">
+                {info.notes}
+              </div>
+            )}
+            <div className="mt-2 text-xs text-slate-400">
+              点"去下载"会在浏览器里下载新 APK，下载完点一下安装即可（首次需在系统里允许"安装未知应用"）。
+            </div>
+          </div>
+        ),
+        okText: "去下载",
+        cancelText: "以后再说",
+        onOk: async () => {
+          try {
+            await openUrl(info.download_url);
+          } catch (e) {
+            message.error(`打开下载链接失败：${e}`);
+          }
+        },
+      });
+    } catch (e) {
+      message.error(`检查更新失败：${e}`);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -250,6 +302,16 @@ export function MobileMe() {
           icon={<Plug size={20} className="text-blue-500" />}
           label="MCP 服务器"
           info="MCP 走子进程 sidecar，移动端沙盒禁止 spawn"
+        />
+        <Row
+          icon={<RefreshCw size={20} className="text-green-600" />}
+          label="检查更新"
+          right={
+            checkingUpdate ? (
+              <span className="text-xs text-slate-400">检查中…</span>
+            ) : undefined
+          }
+          onClick={() => void handleCheckUpdate()}
         />
         <Row
           icon={<Info size={20} className="text-slate-500" />}

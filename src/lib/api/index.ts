@@ -11,6 +11,7 @@ import type {
   ReviewCardInput,
   CardReviewLog,
   CardStats,
+  MobileUpdateInfo,
   AppConfig,
   SystemInfo,
   DashboardStats,
@@ -933,4 +934,12 @@ export const cardApi = {
       cardId,
       limit: limit ?? null,
     }),
+};
+
+/**
+ * 移动端"检查更新" API（仅 Android/iOS 后端注册了 check_mobile_update 命令；
+ * 桌面端用 tauri-plugin-updater，不要调这个）。
+ */
+export const mobileUpdateApi = {
+  check: () => invoke<MobileUpdateInfo>("check_mobile_update"),
 };

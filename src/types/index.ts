@@ -1251,3 +1251,16 @@ export interface CardStats {
   newCards: number;
   total: number;
 }
+
+/**
+ * 移动端"检查更新"结果（与 Rust `MobileUpdateInfo` 对齐）。
+ * 桌面端用 tauri-plugin-updater 自动热替换；移动端只能"检查 → 引导用户去下载新 APK"。
+ */
+export interface MobileUpdateInfo {
+  has_update: boolean;
+  current_version: string;
+  latest_version: string;
+  notes: string;
+  /** APK 直链（优先）或 release 发布页（回落） */
+  download_url: string;
+}

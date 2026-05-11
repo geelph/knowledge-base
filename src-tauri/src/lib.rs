@@ -1143,6 +1143,9 @@ pub fn run() {
             commands::asr::asr_save_config,
             commands::asr::asr_test_connection,
             commands::asr::asr_transcribe_audio,
+            // 移动端"检查更新"（桌面端走 tauri-plugin-updater，无此命令）
+            #[cfg(mobile)]
+            commands::mobile_update::check_mobile_update,
         ])
         // ─── 窗口事件处理 ─────────────────────────
         .on_window_event(|window, event| {

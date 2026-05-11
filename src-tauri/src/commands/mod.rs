@@ -12,6 +12,9 @@ pub mod image;
 pub mod import;
 pub mod links;
 pub mod mcp;
+// 移动端"检查更新"（桌面端用 tauri-plugin-updater，不需要这个）
+#[cfg(mobile)]
+pub mod mobile_update;
 pub mod notes;
 pub mod orphan;
 pub mod pdf;
