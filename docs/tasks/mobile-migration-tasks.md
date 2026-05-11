@@ -380,16 +380,18 @@
   - [ ] iOS：新增 `macos-latest` runner + `tauri ios build`（需 Apple Developer 账号，阻塞）
   - [ ] CI release APK 上传到 release 仓库（文件名约定 `knowledge-base_<version>_android-arm64.apk`）+ 写回 `update.json` 的 `platforms.android-arm64.url`（配合 T-M021）
 
-#### T-M021 · 移动端"检查更新"（自更新引导）
+#### T-M021 · 移动端"检查更新"（自更新引导）—— 闭环已通
 
-- **状态**：`in_progress`（前后端已实现；待 update.json 加 android 字段 + CI 上传 release APK）
+- **状态**：`in_progress`（前后端 + CI 上传 + update.json 模板都齐了；剩首次实跑验证）
 - **价值**：⭐⭐⭐⭐  成本：低
 - **背景**：`tauri-plugin-updater` 不支持移动端（且本项目已 `#[cfg(desktop)]` 隔离），移动端没法原地热替换，只能"检查→引导用户去下载新 APK"
 - **子任务**：
   - [x] Rust：`commands/mobile_update.rs`（`#[cfg(mobile)]`）`check_mobile_update` —— 拉 `update.json`（与桌面 updater 同 3 个 endpoint）比对版本，返回 `{has_update, current/latest_version, notes, download_url}`；`download_url` 优先 `platforms.android-arm64.url`，没有则回落 release 发布页
   - [x] 前端：`MobileMe` 加「检查更新」入口 → 有新版弹 Modal（版本 + 更新说明 + 去下载）→ `openUrl(download_url)` 浏览器接管下载，下完点一下进系统安装器（首次系统问"允许安装未知应用"，那是浏览器的权限，本 App 不需要 `REQUEST_INSTALL_PACKAGES`）
-  - [ ] release 仓库的 `update.json` 加 `platforms.android-arm64.url`（指向 release APK 直链）—— 依赖 T-M019 CI + T-M020
-  - [ ] CI（T-M020）出 release APK 后上传到 release 仓库，文件名约定 `knowledge-base_<version>_android-arm64.apk`
+  - [x] CI：`android.yml` release 构建产物起稳定名 `Knowledge.Base_<version>_android-arm64.apk`（+ `.aab`），tag 触发时附到 `bkywksj/knowledge-base` 的 Release 草稿
+  - [x] `release-publish` 技能：步骤 8 `update.json` 的 `build()` 已加 `platforms.android-arm64.url` = `.../releases/download/v<version>-mobile.0/Knowledge.Base_<version>_android-arm64.apk`（只发桌面时删这一项即可）
+  - [ ] 首次实跑：推 `v<version>-mobile.0` tag → 等 android.yml 出签名 APK → `/release` 时带上 android-arm64 字段 → 真机点"检查更新"验证下载安装链路
+  - [ ] 可选优化：把 Android APK 也镜像到 R2（现在 `update.json` 里 android URL 指 GitHub Release，国内可能慢；桌面产物走 R2 为主源，移动端可比照）
 
 ---
 

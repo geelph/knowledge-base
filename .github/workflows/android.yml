@@ -20,14 +20,16 @@
 #   - TAURI_SIGNING_PRIVATE_KEY      tauri updater 私钥（src-tauri/keys/tauri-updater.key 内容）
 #   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD  （空）
 #
-# 产物：
-#   - app-aarch64-debug.apk / app-aarch64-release.apk（仅 ARM64 主流真机）
-#   - app-*-release.aab（release 构建才有）
+# 产物（统一起名，与桌面产物 Knowledge.Base_x.y.z_... 同风格）：
+#   - Knowledge.Base_<version>_android-arm64.apk   （侧载 / App 内"检查更新"下载）
+#   - Knowledge.Base_<version>_android-arm64.aab   （release 才有，传 Google Play）
 #
 # 上传到：
 #   - GitHub Actions Artifacts（30 天后自动清理）
-#   - tag 触发时附加到 GitHub Release（草稿）
-#   - 后续可加上传到 release 仓库 / R2，并往 update.json 加 android-arm64 字段
+#   - tag 触发时附加到本仓库 GitHub Release（草稿）
+#     → /release 流程生成 update.json 时把 platforms.android-arm64.url 指向：
+#       https://github.com/bkywksj/knowledge-base/releases/download/<tag>/Knowledge.Base_<version>_android-arm64.apk
+#       App 内 check_mobile_update 命令读 update.json 拿到这个直链 → openUrl 下载安装
 # =============================================================================
 
 name: Android Build
@@ -124,26 +126,38 @@ jobs:
       - name: List build outputs
         run: find src-tauri/gen/android/app/build/outputs -type f \( -name '*.apk' -o -name '*.aab' \) -print
 
+      # 给产物起稳定名 Knowledge.Base_<version>_android-arm64.apk —— App 内"检查更新"
+      # 的 update.json 会指向这个固定文件名（与桌面产物 Knowledge.Base_x.y.z_... 同风格）。
+      # 这一步对 debug / release 都跑（debug 也方便侧载时辨认版本）。
+      - name: Stage renamed artifacts
+        id: stage
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p dist-android
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -n 1)
+          cp "$APK" "dist-android/Knowledge.Base_${VERSION}_android-arm64.apk"
+          AAB=$(find src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' 2>/dev/null | head -n 1 || true)
+          if [ -n "$AAB" ]; then cp "$AAB" "dist-android/Knowledge.Base_${VERSION}_android-arm64.aab"; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          ls -lh dist-android
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: knowledge-base-android-${{ github.event.inputs.build_type || 'debug' }}-${{ github.sha }}
-          path: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-          # debug 只产 apk，没有 aab，所以 warn 而非 error（避免 debug 构建因缺 aab 失败）
-          if-no-files-found: warn
+          name: knowledge-base-android-${{ github.event.inputs.build_type || 'debug' }}-v${{ steps.stage.outputs.version }}
+          path: dist-android/*
+          if-no-files-found: error
           retention-days: 30
 
-      # 仅在 tag 触发时附加到 GitHub Release（草稿）
+      # tag 触发时把 APK/AAB 附到本仓库的 GitHub Release 草稿。
+      # 之后 /release 流程生成 update.json 时，platforms.android-arm64.url 指向：
+      #   https://github.com/bkywksj/knowledge-base/releases/download/<tag>/Knowledge.Base_<version>_android-arm64.apk
       - name: Attach to Release (only on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: true
-          files: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          files: dist-android/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

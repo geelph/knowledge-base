@@ -368,6 +368,14 @@ def build(base):
                 'url': f'{base}/Knowledge.Base_{VERSION}_amd64.AppImage.tar.gz',
                 'signature': read_sig(f'{RELEASE_DIR}/Knowledge.Base_{VERSION}_amd64.AppImage.tar.gz.sig'),
             },
+            # Android arm64 —— App 内"检查更新"(check_mobile_update) 读这个 url 拿 APK 直链。
+            # 不放 signature（Android 自己验 APK 签名，不用 minisign）。
+            # 前提：本版本已跑过 android.yml release 构建（推 v{VERSION}-mobile.0 tag 触发），
+            # 产物 Knowledge.Base_{VERSION}_android-arm64.apk 已附到 bkywksj/knowledge-base 的 Release。
+            # 若本版本没出 Android 包，就把这一项删掉（check_mobile_update 会回落到 release 发布页）。
+            'android-arm64': {
+                'url': f'https://github.com/bkywksj/knowledge-base/releases/download/v{VERSION}-mobile.0/Knowledge.Base_{VERSION}_android-arm64.apk',
+            },
         },
     }
 
@@ -571,6 +579,32 @@ git push github vx.y.z
 - CI 自动用 `TAURI_SIGNING_PRIVATE_KEY` 签名
 - `.sig` 文件包含在产物中，无需本地签名
 - Claude 读取 `.sig` 直接注入 `update.json`
+
+---
+
+## Android APK（移动端，独立于桌面三平台）
+
+桌面 `release.yml`（`v*.*.*` tag 触发）只出 Windows/macOS/Linux。Android 走单独的
+`.github/workflows/android.yml`，触发方式：
+
+- 手动：GitHub → Actions → "Android Build" → Run workflow → 选 `release`
+- 或推 `v<VERSION>-mobile.0` tag（与桌面 `v<VERSION>` tag 区分，不互相打架）
+
+release 构建用 `kb-release.jks` 正式签名（6 个 Secrets 主仓 + 备用仓都已配），产物：
+- `Knowledge.Base_<VERSION>_android-arm64.apk`（侧载 / App 内"检查更新"）
+- `Knowledge.Base_<VERSION>_android-arm64.aab`（传 Google Play）
+
+tag 触发时自动附到 `bkywksj/knowledge-base` 的 GitHub Release 草稿。
+
+**配合 App 内"检查更新"**：步骤 8 生成的 `update.json` 里 `platforms.android-arm64.url`
+就指向 `.../releases/download/v<VERSION>-mobile.0/Knowledge.Base_<VERSION>_android-arm64.apk`
+（已写进上面 `build()` 脚本）。App 的 `check_mobile_update` 命令读 `update.json` 拿到这个
+直链 → `openUrl` 让浏览器下载 → 用户点一下进系统安装器（首次需在系统里允许"安装未知应用"）。
+**注意**：必须用同一个 `kb-release.jks` 签名，否则老用户装不上（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）。
+
+> 发完整版（桌面 + 移动）的顺序：先推 `v<VERSION>-mobile.0` 触发 android.yml（等它出 APK），
+> 再走桌面 `/release` 流程（这样步骤 8 的 `update.json` 里那个 android-arm64 URL 才是可达的）。
+> 只发桌面时，把 `build()` 里的 `'android-arm64'` 那项删掉即可。
 
 ---
 

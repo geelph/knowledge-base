@@ -312,9 +312,9 @@ version = "1.0.0"
 - **桌面三平台**：已配置 GitHub Actions CI（`.github/workflows/release.yml`），推送 `v*.*.*` Tag 后自动构建 Windows/macOS/Linux 安装包。用 `/release` 命令一键发布，详见 `release-publish` 技能。
 - **Android**：`.github/workflows/android.yml` —— 触发方式 `workflow_dispatch`（手动，可选 debug / release）或推 `v*.*.*-mobile.*` tag（**普通 push 到 master 不触发**，避免跟桌面 CI 打架）：
   - `debug`：SDK debug keystore 自签名 → APK（侧载）
-  - `release`：从 Secrets 还原 `kb-release.jks` + `key.properties` → `tauri android build --apk --aab` 正式签名 → APK + AAB；同时设 `TAURI_SIGNING_PRIVATE_KEY`
+  - `release`：从 Secrets 还原 `kb-release.jks` + `key.properties` → `tauri android build --apk --aab` 正式签名 → 产物起稳定名 `Knowledge.Base_<version>_android-arm64.apk`（+ `.aab`）→ tag 触发时附到本仓库 GitHub Release 草稿；同时设 `TAURI_SIGNING_PRIVATE_KEY`
   - 6 个 Secrets（`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` / `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）在主 `bkywksj/knowledge-base` + 备用 `allebamala/knowledge-base` 两个仓库都已配
-  - 还差：CI 出 release APK 后上传 release 仓库 + 往 `update.json` 加 `platforms.android-arm64.url`（配合 App 内"检查更新"，T-M021 收尾）
+  - **App 内"检查更新"闭环**：`release-publish` 技能步骤 8 生成 `update.json` 时已加 `platforms.android-arm64.url` 指向 `.../releases/download/v<version>-mobile.0/Knowledge.Base_<version>_android-arm64.apk`，App 的 `check_mobile_update` 读它拿直链。剩首次实跑验证（推 `v<version>-mobile.0` tag）。
 - **iOS**：CI 尚未接（需 Apple Developer 账号 + macOS runner，T-M020 待办）。
 
 ---
