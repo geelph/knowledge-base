@@ -3,14 +3,16 @@
 # =============================================================================
 #
 # 触发方式：
-#   - workflow_dispatch（手动触发；可选 debug / release）
-#   - 推送 v*.*.*-mobile.* 格式的 Tag（与桌面 v*.*.* 区分，避免桌面构建 +
-#     Android 构建相互打架）
+#   - workflow_dispatch（手动触发；可选 debug / release，默认 debug）
+#   - 推送 v*.*.*-mobile.* 格式的 Tag → 一律走 release 正式签名构建（与桌面 v*.*.*
+#     区分，避免桌面构建 + Android 构建相互打架）；release-publish 流程就靠这个 tag
+#     触发拿到正式签名 APK
 #
 # 构建类型：
-#   - debug：SDK 自带 debug keystore 自签名，可直接侧载（默认）
+#   - debug：SDK 自带 debug keystore 自签名，可直接侧载（仅 workflow_dispatch 选 debug 时）
 #   - release：用 kb-release.jks 正式签名（需仓库配好 ANDROID_* + TAURI_SIGNING_* Secrets）
 #       同时出 APK（侧载 / 配合 App 内"检查更新"）和 AAB（传 Google Play）
+#       —— tag 触发、或 workflow_dispatch 选 release 时走这条
 #
 # release 构建需要的 GitHub Secrets（主 bkywksj 仓库 + 备用 allebamala 仓库都已配）：
 #   - ANDROID_KEYSTORE_BASE64        base64(kb-release.jks 文件内容)
@@ -99,14 +101,17 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      # debug 只在 workflow_dispatch 明确选 debug 时跑（侧载快速测试用）。
+      # tag 触发 / workflow_dispatch 选 release → 走下面的 release 路径。
       - name: Tauri Android build (debug)
-        if: github.event.inputs.build_type != 'release'
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'debug'
         run: pnpm exec tauri android build --apk --debug --target aarch64
 
       # release：先从 Secrets 还原 keystore + key.properties（gitignored，仓库里没有），
-      # build.gradle.kts 的 signingConfigs.release 会读 key.properties 自动签名
+      # build.gradle.kts 的 signingConfigs.release 会读 key.properties 自动签名。
+      # 条件：tag 触发（refs/tags/...）或 workflow_dispatch 选 release。
       - name: Restore Android release keystore
-        if: github.event.inputs.build_type == 'release'
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.build_type == 'release'
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/gen/android/kb-release.jks
           cat > src-tauri/gen/android/key.properties <<EOF
@@ -117,7 +122,7 @@ jobs:
           EOF
 
       - name: Tauri Android build (release, signed APK + AAB)
-        if: github.event.inputs.build_type == 'release'
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.build_type == 'release'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
