@@ -17,7 +17,7 @@
  *  - 文本先 `\r\n` → `\n`，否则一边带 `\r` 会被判成"整篇每行都变了"。
  *  - 用 callback ref 在 div 真正挂进 DOM 后再 new MergeView（antd Modal 内容异步挂载，useEffect 里 ref 还是 null）。
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { Alert, Button, Modal, Space } from "antd";
 import { MergeView } from "@codemirror/merge";
 import { EditorView, lineNumbers } from "@codemirror/view";
@@ -40,6 +40,8 @@ interface Props {
   onSave?: (result: { left: string; right: string }) => Promise<void> | void;
   /** 「保存更改」下方的小字警告（如"将以 markdown 重新生成笔记内容，自定义块可能丢失"） */
   saveHint?: string;
+  /** 标题下方说明行右侧的额外控件（如剪贴板对比的「Markdown 源码 / 纯文本」切换） */
+  headerExtra?: ReactNode;
 }
 
 const normalizeEol = (s: string) => s.replace(/\r\n/g, "\n");
@@ -85,7 +87,7 @@ function sideExtensions(editable: boolean, dark: boolean) {
   ];
 }
 
-export function DiffMergeModal({ open, onClose, left, right, onSave, saveHint }: Props) {
+export function DiffMergeModal({ open, onClose, left, right, onSave, saveHint, headerExtra }: Props) {
   const dark = useAppStore((s) => s.themeCategory) === "dark";
   const mvRef = useRef<MergeView | null>(null);
   // callback ref 的 [] 依赖闭包读不到最新 props，用 ref 兜住
@@ -158,15 +160,22 @@ export function DiffMergeModal({ open, onClose, left, right, onSave, saveHint }:
     >
       <div
         style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
           fontSize: 12,
           color: "var(--ant-color-text-secondary, #888)",
           marginBottom: 6,
         }}
       >
-        左 = {left.label}
-        {left.editable ? "" : "（只读）"}，右 = {right.label}
-        {right.editable ? "" : "（只读）"}。中缝 ▶ 把左侧变更块覆盖到右侧；两栏均可直接编辑（行不换行，可横向滚）。
-        并排 diff 为同步滚动（与 IDEA 一致）。
+        <span>
+          左 = {left.label}
+          {left.editable ? "" : "（只读）"}，右 = {right.label}
+          {right.editable ? "" : "（只读）"}。中缝 ▶ 把左侧变更块覆盖到右侧；两栏均可直接编辑（行不换行，可横向滚）。
+          并排 diff 为同步滚动（与 IDEA 一致）。
+        </span>
+        {headerExtra && <span style={{ flexShrink: 0 }}>{headerExtra}</span>}
       </div>
       <div
         ref={setHostEl}
