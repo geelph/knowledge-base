@@ -1758,3 +1758,10 @@ body,
 .cm-mergeViewEditor {
   min-height: 0;
 }
+
+/* ── 侧边栏 / 设置页锚点导航：禁止鼠标拖选文本（纯导航区，拖选只会显得乱） ── */
+.activity-bar,
+.anchor-page-nav {
+  user-select: none;
+  -webkit-user-select: none;
+}
