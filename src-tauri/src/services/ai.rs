@@ -84,6 +84,45 @@ fn build_openai_chat_url(api_url: &str) -> String {
     }
 }
 
+/// 把一个 error 链展开成 `msg ← cause ← cause …`，并对每一层尝试 downcast 成 `std::io::Error`，
+/// 带上 `kind` 和 `raw_os_error`（Windows 上 10061=连接被拒、10060=超时、10065=无路由…）。
+/// 日志里能看到 reqwest 之下 hyper/IO 的真实原因。
+fn err_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    fn fmt_one(e: &(dyn std::error::Error + 'static)) -> String {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            format!("{} [io kind={:?} os_error={:?}]", io, io.kind(), io.raw_os_error())
+        } else {
+            e.to_string()
+        }
+    }
+    let mut s = fmt_one(e);
+    let mut src = e.source();
+    while let Some(cause) = src {
+        s.push_str(" ← ");
+        s.push_str(&fmt_one(cause));
+        src = cause.source();
+    }
+    s
+}
+
+/// 把 reqwest 发送错误的关键诊断位（错误链 + is_* 分类）拼成一行，给 `log::warn!` 用。
+fn ollama_send_error_diag(e: &reqwest::Error, url: &str) -> String {
+    format!(
+        "url={} | is_connect={} is_timeout={} is_request={} is_body={} is_builder={} | proxy_env={:?} | chain: {}",
+        url,
+        e.is_connect(),
+        e.is_timeout(),
+        e.is_request(),
+        e.is_body(),
+        e.is_builder(),
+        ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"]
+            .iter()
+            .filter(|k| std::env::var_os(k).is_some())
+            .collect::<Vec<_>>(),
+        err_chain(e)
+    )
+}
+
 /// 将 reqwest 错误格式化为对用户友好的 Ollama 错误提示
 fn format_ollama_send_error(e: &reqwest::Error, url: &str) -> String {
     if e.is_connect() || e.is_timeout() {
@@ -93,10 +132,10 @@ fn format_ollama_send_error(e: &reqwest::Error, url: &str) -> String {
              2. 设置里的 API 地址正确\n\
              3. 若设置了系统代理，确保其不拦截本地请求\n\
              原始错误: {}",
-            url, e
+            url, err_chain(e)
         )
     } else {
-        format!("Ollama 请求失败: {}", e)
+        format!("Ollama 请求失败: {}", err_chain(e))
     }
 }
 
@@ -551,7 +590,7 @@ impl AiService {
         let seed: u32 = rand::random();
         let timeout = std::time::Duration::from_secs(10);
         let raw = if model.provider == "ollama" {
-            let url = format!("{}/api/chat", model.api_url.trim_end_matches('/'));
+            let url = format!("{}/api/chat", model.api_url.trim().trim_end_matches('/'));
             let client = build_ollama_client();
             let response = client
                 .post(&url)
@@ -667,7 +706,7 @@ impl AiService {
         let started = std::time::Instant::now();
 
         if input.provider == "ollama" {
-            let url = format!("{}/api/chat", input.api_url.trim_end_matches('/'));
+            let url = format!("{}/api/chat", input.api_url.trim().trim_end_matches('/'));
             let client = build_ollama_client();
             let response = client
                 .post(&url)
@@ -752,7 +791,7 @@ impl AiService {
         messages: &[Value],
         mut cancel_rx: watch::Receiver<bool>,
     ) -> Result<String, AppError> {
-        let url = format!("{}/api/chat", model.api_url.trim_end_matches('/'));
+        let url = format!("{}/api/chat", model.api_url.trim().trim_end_matches('/'));
         let client = build_ollama_client();
         let response = client
             .post(&url)
@@ -1142,11 +1181,12 @@ impl AiService {
         messages: &[Value],
         mut cancel_rx: watch::Receiver<bool>,
     ) -> Result<String, AppError> {
-        let url = format!("{}/api/chat", model.api_url.trim_end_matches('/'));
+        let url = format!("{}/api/chat", model.api_url.trim().trim_end_matches('/'));
         let client = build_ollama_client();
         log::info!(
-            "[Ollama] POST {} model={} msgs={}",
+            "[Ollama] POST {} (raw api_url={:?}) model={} msgs={}",
             url,
+            model.api_url,
             model.model_id,
             messages.len()
         );
@@ -1165,7 +1205,7 @@ impl AiService {
             Err(e) => {
                 // Bug B: 请求没发出去（连接失败 / read_timeout）也要让前端收到 ai:error，
                 // 否则只靠 command reject 不够显眼，用户只见 UI"一直停止"
-                log::warn!("[Ollama] 请求发送失败: {} ({})", e, url);
+                log::warn!("[Ollama] 请求发送失败: {}", ollama_send_error_diag(&e, &url));
                 let msg = format_ollama_send_error(&e, &url);
                 emit_ai_error(app, conversation_id, &msg);
                 return Err(AppError::Custom(msg));
@@ -1775,7 +1815,7 @@ impl AiService {
         tools: &[Value],
         mut cancel_rx: watch::Receiver<bool>,
     ) -> (Result<String, AppError>, Option<Vec<ToolCallAccum>>) {
-        let url = format!("{}/api/chat", model.api_url.trim_end_matches('/'));
+        let url = format!("{}/api/chat", model.api_url.trim().trim_end_matches('/'));
         let client = build_ollama_client();
 
         let mut request_body = json!({
@@ -1787,8 +1827,9 @@ impl AiService {
             request_body["tools"] = json!(tools);
         }
         log::info!(
-            "[Ollama/tools] POST {} model={} tools={} msgs={}",
+            "[Ollama/tools] POST {} (raw api_url={:?}) model={} tools={} msgs={}",
             url,
+            model.api_url,
             model.model_id,
             tools.len(),
             messages.len()
@@ -1802,6 +1843,7 @@ impl AiService {
             let resp = match client.post(&url).json(&request_body).send().await {
                 Ok(r) => r,
                 Err(e) => {
+                    log::warn!("[Ollama/tools] 请求发送失败: {}", ollama_send_error_diag(&e, &url));
                     let msg = format_ollama_send_error(&e, &url);
                     emit_ai_error(app, conversation_id, &msg);
                     return (Err(AppError::Custom(msg)), None);
