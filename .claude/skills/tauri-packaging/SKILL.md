@@ -310,7 +310,11 @@ version = "1.0.0"
 ## CI 自动构建（推荐）
 
 - **桌面三平台**：已配置 GitHub Actions CI（`.github/workflows/release.yml`），推送 `v*.*.*` Tag 后自动构建 Windows/macOS/Linux 安装包。用 `/release` 命令一键发布，详见 `release-publish` 技能。
-- **Android debug APK**：已配置 `.github/workflows/android.yml`（T-M020 一期），CI 出 debug APK；release 签名 APK / AAB 的 CI 尚未接（T-M020 二期）。
+- **Android**：`.github/workflows/android.yml` —— 触发方式 `workflow_dispatch`（手动，可选 debug / release）或推 `v*.*.*-mobile.*` tag（**普通 push 到 master 不触发**，避免跟桌面 CI 打架）：
+  - `debug`：SDK debug keystore 自签名 → APK（侧载）
+  - `release`：从 Secrets 还原 `kb-release.jks` + `key.properties` → `tauri android build --apk --aab` 正式签名 → APK + AAB；同时设 `TAURI_SIGNING_PRIVATE_KEY`
+  - 6 个 Secrets（`ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` / `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）在主 `bkywksj/knowledge-base` + 备用 `allebamala/knowledge-base` 两个仓库都已配
+  - 还差：CI 出 release APK 后上传 release 仓库 + 往 `update.json` 加 `platforms.android-arm64.url`（配合 App 内"检查更新"，T-M021 收尾）
 - **iOS**：CI 尚未接（需 Apple Developer 账号 + macOS runner，T-M020 待办）。
 
 ---

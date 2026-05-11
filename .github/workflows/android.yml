@@ -1,24 +1,33 @@
 # =============================================================================
-# Android 构建工作流（移动端 T-M020 一期）
+# Android 构建工作流（移动端 T-M020）
 # =============================================================================
 #
 # 触发方式：
-#   - workflow_dispatch（手动触发）
+#   - workflow_dispatch（手动触发；可选 debug / release）
 #   - 推送 v*.*.*-mobile.* 格式的 Tag（与桌面 v*.*.* 区分，避免桌面构建 +
 #     Android 构建相互打架）
 #
-# 当前状态：
-#   - 只构建 debug APK（自签名，可侧载）
-#   - 不构建 AAB（AAB 上 Google Play 必须用正式 keystore，下迭代加 GitHub
-#     Secrets 后启用）
+# 构建类型：
+#   - debug：SDK 自带 debug keystore 自签名，可直接侧载（默认）
+#   - release：用 kb-release.jks 正式签名（需仓库配好 ANDROID_* + TAURI_SIGNING_* Secrets）
+#       同时出 APK（侧载 / 配合 App 内"检查更新"）和 AAB（传 Google Play）
+#
+# release 构建需要的 GitHub Secrets（主 bkywksj 仓库 + 备用 allebamala 仓库都已配）：
+#   - ANDROID_KEYSTORE_BASE64        base64(kb-release.jks 文件内容)
+#   - ANDROID_KEYSTORE_PASSWORD      keystore 密码
+#   - ANDROID_KEY_ALIAS              key alias（kb）
+#   - ANDROID_KEY_PASSWORD           key 密码
+#   - TAURI_SIGNING_PRIVATE_KEY      tauri updater 私钥（src-tauri/keys/tauri-updater.key 内容）
+#   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD  （空）
 #
 # 产物：
-#   - app-aarch64-debug.apk（仅 ARM64 主流真机）
-#   - app-armv7-debug.apk（兼容老机型，可选）
+#   - app-aarch64-debug.apk / app-aarch64-release.apk（仅 ARM64 主流真机）
+#   - app-*-release.aab（release 构建才有）
 #
 # 上传到：
-#   - GitHub Actions Artifacts（90 天后自动清理）
-#   - 后续可加上传到 Release / R2
+#   - GitHub Actions Artifacts（30 天后自动清理）
+#   - tag 触发时附加到 GitHub Release（草稿）
+#   - 后续可加上传到 release 仓库 / R2，并往 update.json 加 android-arm64 字段
 # =============================================================================
 
 name: Android Build
@@ -92,40 +101,49 @@ jobs:
         if: github.event.inputs.build_type != 'release'
         run: pnpm exec tauri android build --apk --debug --target aarch64
 
-      - name: Tauri Android build (release)
+      # release：先从 Secrets 还原 keystore + key.properties（gitignored，仓库里没有），
+      # build.gradle.kts 的 signingConfigs.release 会读 key.properties 自动签名
+      - name: Restore Android release keystore
+        if: github.event.inputs.build_type == 'release'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/gen/android/kb-release.jks
+          cat > src-tauri/gen/android/key.properties <<EOF
+          storeFile=../kb-release.jks
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
+      - name: Tauri Android build (release, signed APK + AAB)
         if: github.event.inputs.build_type == 'release'
         env:
-          # 占位：当用户配好 keystore 后，把以下 Secrets 全设上即可启用 release 签名
-          # ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          # ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          # ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
-          # ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          DUMMY: 'placeholder'
-        run: |
-          echo "::warning::release 构建需要 keystore Secrets，目前未配置，跳过签名"
-          pnpm exec tauri android build --apk --target aarch64
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm exec tauri android build --apk --aab --target aarch64
 
-      - name: Find APK
-        id: find_apk
-        run: |
-          APK=$(find src-tauri/gen/android -name '*.apk' | head -n 1)
-          echo "apk_path=$APK" >> $GITHUB_OUTPUT
-          echo "Found APK: $APK"
+      - name: List build outputs
+        run: find src-tauri/gen/android/app/build/outputs -type f \( -name '*.apk' -o -name '*.aab' \) -print
 
-      - name: Upload APK artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: knowledge-base-android-${{ github.event.inputs.build_type || 'debug' }}-${{ github.sha }}
-          path: ${{ steps.find_apk.outputs.apk_path }}
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          # debug 只产 apk，没有 aab，所以 warn 而非 error（避免 debug 构建因缺 aab 失败）
+          if-no-files-found: warn
           retention-days: 30
 
       # 仅在 tag 触发时附加到 GitHub Release（草稿）
-      - name: Attach APK to Release (only on tag)
+      - name: Attach to Release (only on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: true
-          files: ${{ steps.find_apk.outputs.apk_path }}
+          files: |
+            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

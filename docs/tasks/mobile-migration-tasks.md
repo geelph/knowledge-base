@@ -368,15 +368,17 @@
   - [ ] 自签 release APK 同时输出 + 上传 release 仓库（配合移动端"检查更新"的 APK 直链）
   - **⚠️ 关键约束**：第一个分发给用户的 release APK 用了 `kb-release.jks` → 此后所有版本都必须用同一个 keystore，否则用户的"检查更新→下载新 APK"会因签名不匹配装不上（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）。keystore 丢了 = 再也无法给已安装用户推更新。务必备份 `.jks` + 两个密码。
 
-#### T-M020 · CI 扩展：`release.yml` 加 Android / iOS job
+#### T-M020 · Android / iOS CI
 
-- **状态**：`pending`
+- **状态**：`in_progress`（Android debug + release 签名构建已接；iOS 待 Mac）
 - **价值**：⭐⭐⭐⭐  成本：中
 - **子任务**：
-  - [ ] `.github/workflows/release.yml` matrix 增加 `platform: ubuntu-22.04` + Android target 节点
-  - [ ] 新增 `macos-latest` + iOS target 节点
-  - [ ] 桌面端 4 个 job 不动，确保不破坏现有发布流程
-  - [ ] tag `v*-mobile.*.*` 触发移动端 CI（与桌面 tag 区分）
+  - [x] `.github/workflows/android.yml` 独立工作流（不动桌面 `release.yml`）—— 触发：`workflow_dispatch`（手动选 debug/release）+ `v*.*.*-mobile.*` tag；普通 push 到 master 不触发
+  - [x] debug：SDK debug keystore 自签名 → APK
+  - [x] release：从 6 个 Secrets 还原 `kb-release.jks` + `key.properties` + 设 `TAURI_SIGNING_PRIVATE_KEY` → `tauri android build --apk --aab` 正式签名 → APK + AAB；产物上传 Artifacts，tag 触发时附 Release 草稿
+  - [x] 6 个 Secrets 在主 `bkywksj` + 备用 `allebamala` 两个仓库都已配
+  - [ ] iOS：新增 `macos-latest` runner + `tauri ios build`（需 Apple Developer 账号，阻塞）
+  - [ ] CI release APK 上传到 release 仓库（文件名约定 `knowledge-base_<version>_android-arm64.apk`）+ 写回 `update.json` 的 `platforms.android-arm64.url`（配合 T-M021）
 
 #### T-M021 · 移动端"检查更新"（自更新引导）
 
