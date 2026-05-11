@@ -69,8 +69,7 @@ pub trait SyncBackendImpl {
     /// 下载一条笔记的 .md 文本；不存在返回 Ok(None)
     fn get_note(&self, path: &str) -> Result<Option<String>, AppError>;
 
-    /// 删除远端笔记（v1 阶段还没接 tombstone 推送，留接口）
-    #[allow(dead_code)]
+    /// 删除远端笔记（T-S012 起被 push tombstone 流程调用）
     fn delete_note(&self, path: &str) -> Result<(), AppError>;
 
     /// 上传附件（按 hash 路径，CAS）；返回 Ok(()) 即可

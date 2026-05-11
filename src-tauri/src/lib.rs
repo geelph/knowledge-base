@@ -727,6 +727,13 @@ pub fn run() {
 
             app.manage(state);
 
+            // 启动期清理 .sync-tmp-* 孤儿（上次崩溃 / kill 可能残留 VACUUM 副本 / push-zip / pull-zip）
+            // 顶层扫，严格前缀匹配，不递归子目录 → 不会误删任何业务资产
+            let cleaned = services::sync::SyncService::cleanup_orphan_temp_files(&instance_dir);
+            if cleaned > 0 {
+                log::info!("[startup] 清理 {} 个同步临时孤儿文件", cleaned);
+            }
+
             // 窗口标题区分实例（DEV/PROD × 默认/实例N 四态）
             // 仅桌面端：移动端无窗口标题概念（标题栏由系统/状态栏管理）
             #[cfg(desktop)]
@@ -1024,6 +1031,8 @@ pub fn run() {
             #[cfg(desktop)]
             commands::export::export_single_note_to_word,
             commands::export::export_single_note_to_html,
+            // R-005 PDF 导出：渲染 HTML 字符串供前端 iframe 打印
+            commands::export::render_note_html_for_pdf,
             // 笔记批量操作
             commands::notes::trash_all_notes,
             // 图片模块

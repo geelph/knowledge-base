@@ -13,6 +13,7 @@ impl Database {
     /// 同步维护：
     /// - `title_normalized`（v17）：wiki 链接查找走索引
     /// - `content_hash`（v22）：导入去重用的 SHA-256 指纹
+    /// - `stable_uuid`（v36）：多端同步稳定标识，UUID v4
     pub fn create_note(&self, input: &NoteInput) -> Result<Note, AppError> {
         let conn = self
             .conn
@@ -21,20 +22,72 @@ impl Database {
 
         let normalized = crate::database::links::normalize_title(&input.title);
         let content_hash = crate::services::hash::sha256_hex(&input.content);
+        let stable_uuid = uuid::Uuid::new_v4().to_string();
         conn.execute(
-            "INSERT INTO notes (title, content, folder_id, title_normalized, content_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO notes (title, content, folder_id, title_normalized, content_hash, stable_uuid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 input.title,
                 input.content,
                 input.folder_id,
                 normalized,
-                content_hash
+                content_hash,
+                stable_uuid
             ],
         )?;
 
         let id = conn.last_insert_rowid();
         self.get_note_inner(&conn, id)
+    }
+
+    /// 用指定的 stable_uuid 创建笔记（同步 V1 pull 用：保留远端 UUID 让多端 ID 稳定）
+    ///
+    /// 与 `create_note` 区别：UUID 由调用方传入而非内部生成。冲突时返回 SQLite UNIQUE 错误，
+    /// 上层 pull 流程应先用 `get_note_id_by_stable_uuid` 查重决定 update / create。
+    pub fn create_note_with_uuid(
+        &self,
+        input: &NoteInput,
+        stable_uuid: &str,
+    ) -> Result<Note, AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let normalized = crate::database::links::normalize_title(&input.title);
+        let content_hash = crate::services::hash::sha256_hex(&input.content);
+        conn.execute(
+            "INSERT INTO notes (title, content, folder_id, title_normalized, content_hash, stable_uuid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                input.title,
+                input.content,
+                input.folder_id,
+                normalized,
+                content_hash,
+                stable_uuid
+            ],
+        )?;
+        let id = conn.last_insert_rowid();
+        self.get_note_inner(&conn, id)
+    }
+
+    /// 按 stable_uuid 查笔记 id（同步 V1 多端 upsert 用）
+    ///
+    /// `stable_uuid` 是 v36 引入的多端稳定标识。返回值用于 sync_v1 pull 拿到远端 manifest entry 后
+    /// 判断"本地是否已有该笔记"，决定 update 还是 create。
+    pub fn get_note_id_by_stable_uuid(&self, uuid: &str) -> Result<Option<i64>, AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let id = conn
+            .query_row(
+                "SELECT id FROM notes WHERE stable_uuid = ?1",
+                params![uuid],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        Ok(id)
     }
 
     /// 更新笔记
@@ -902,10 +955,11 @@ impl Database {
         let title = format!("{} 的日记", date);
         let normalized = crate::database::links::normalize_title(&title);
         let empty_hash = crate::services::hash::sha256_hex("");
+        let stable_uuid = uuid::Uuid::new_v4().to_string();
         conn.execute(
-            "INSERT INTO notes (title, content, is_daily, daily_date, title_normalized, content_hash)
-             VALUES (?1, '', 1, ?2, ?3, ?4)",
-            params![title, date, normalized, empty_hash],
+            "INSERT INTO notes (title, content, is_daily, daily_date, title_normalized, content_hash, stable_uuid)
+             VALUES (?1, '', 1, ?2, ?3, ?4, ?5)",
+            params![title, date, normalized, empty_hash, stable_uuid],
         )?;
 
         let id = conn.last_insert_rowid();
@@ -1147,5 +1201,151 @@ impl Database {
             .query_row(params![title, content_hash], |row| row.get::<_, i64>(0))
             .ok();
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod stable_uuid_tests {
+    //! v36 / T-S010：notes.stable_uuid 列 + UNIQUE 索引 + 自动生成行为
+    //!
+    //! 用 `Database::init(":memory:")` 走完整 v0 → v36 迁移链路验证：
+    //! - 迁移幂等（重复初始化不报错）
+    //! - 新建笔记自动填 stable_uuid
+    //! - UNIQUE 索引拦截重复
+    //! - get_note_id_by_stable_uuid 能查到
+
+    use super::*;
+    use crate::database::schema;
+
+    fn fresh_db() -> Database {
+        Database::init(":memory:").expect("init :memory: 应成功（含 v0→v36 完整迁移）")
+    }
+
+    #[test]
+    fn migration_creates_stable_uuid_column_and_index() {
+        let db = fresh_db();
+        let conn = db.conn_lock().unwrap();
+
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(notes)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(cols.contains(&"stable_uuid".to_string()), "notes 表应有 stable_uuid 列");
+
+        let idx: Option<String> = conn
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_notes_stable_uuid'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        assert!(idx.is_some(), "应创建部分唯一索引 idx_notes_stable_uuid");
+    }
+
+    #[test]
+    fn schema_version_is_at_least_36() {
+        let db = fresh_db();
+        let conn = db.conn_lock().unwrap();
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert!(version >= 36, "迁移完成后 user_version 应 ≥ 36");
+        assert_eq!(version, schema::SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn create_note_auto_fills_stable_uuid() {
+        let db = fresh_db();
+        let n1 = db
+            .create_note(&NoteInput {
+                title: "A".into(),
+                content: "x".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let n2 = db
+            .create_note(&NoteInput {
+                title: "B".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+
+        let (u1, u2): (String, String) = {
+            let conn = db.conn_lock().unwrap();
+            (
+                conn.query_row(
+                    "SELECT stable_uuid FROM notes WHERE id = ?1",
+                    params![n1.id],
+                    |r| r.get(0),
+                )
+                .unwrap(),
+                conn.query_row(
+                    "SELECT stable_uuid FROM notes WHERE id = ?1",
+                    params![n2.id],
+                    |r| r.get(0),
+                )
+                .unwrap(),
+            )
+        };
+        assert_eq!(u1.len(), 36, "UUID v4 文本长度应为 36（含 4 个连字符）");
+        assert_ne!(u1, u2, "不同笔记 UUID 必须不同");
+    }
+
+    #[test]
+    fn unique_index_rejects_duplicate_stable_uuid() {
+        let db = fresh_db();
+        db.create_note(&NoteInput {
+            title: "A".into(),
+            content: "x".into(),
+            folder_id: None,
+        })
+        .unwrap();
+
+        // 手动 INSERT 一行使用已存在的 stable_uuid → 应被 UNIQUE 索引拦截
+        let dup = {
+            let conn = db.conn_lock().unwrap();
+            let existing: String = conn
+                .query_row("SELECT stable_uuid FROM notes LIMIT 1", [], |r| r.get(0))
+                .unwrap();
+            conn.execute(
+                "INSERT INTO notes (title, content, title_normalized, content_hash, stable_uuid)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params!["dup", "y", "dup", "h", existing],
+            )
+        };
+        assert!(dup.is_err(), "UNIQUE 约束应拒绝重复 stable_uuid");
+    }
+
+    #[test]
+    fn get_note_id_by_stable_uuid_works() {
+        let db = fresh_db();
+        let n = db
+            .create_note(&NoteInput {
+                title: "A".into(),
+                content: "x".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let u: String = {
+            let conn = db.conn_lock().unwrap();
+            conn.query_row(
+                "SELECT stable_uuid FROM notes WHERE id = ?1",
+                params![n.id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+
+        let got = db.get_note_id_by_stable_uuid(&u).unwrap();
+        assert_eq!(got, Some(n.id));
+
+        let none = db
+            .get_note_id_by_stable_uuid("00000000-0000-0000-0000-000000000000")
+            .unwrap();
+        assert_eq!(none, None);
     }
 }

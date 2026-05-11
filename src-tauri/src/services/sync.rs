@@ -485,6 +485,55 @@ impl SyncService {
         let _ = db.delete_config(&Self::pw_config_key(username))?;
         Ok(())
     }
+
+    // ─── 临时文件孤儿清理 ──────────────────────────
+    //
+    // 同步流程中会在 data_dir 下生成 `.sync-tmp-*` 临时文件（VACUUM 副本 / 上传 zip / 下载 zip）：
+    //   - `.sync-tmp-app.db`     —— VACUUM INTO 临时副本（导出/推送）
+    //   - `.sync-tmp-upload.zip` —— WebDAV 推送前的本地快照
+    //   - `.sync-tmp-pull.zip`   —— WebDAV 下载落盘
+    // 正常路径会在使用后清理，但应用崩溃 / kill 导致残留。本方法在启动期统一扫一遍。
+    //
+    // 安全保证：**严格匹配前缀 `.sync-tmp-` 且只看顶层文件**（不递归子目录），
+    // 不会误删 `sources/` `pdfs/` `kb_assets/` 等业务资产，也不会动子目录里的同名文件。
+
+    /// 扫 `data_dir` 顶层删除 `.sync-tmp-*` 残留文件，返回删除数量。
+    /// 任意单个失败仅 warn，不阻塞启动。
+    pub fn cleanup_orphan_temp_files(data_dir: &Path) -> usize {
+        let entries = match fs::read_dir(data_dir) {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("[sync] cleanup_orphan_temp_files: 读取 {} 失败 {}", data_dir.display(), e);
+                return 0;
+            }
+        };
+        let mut removed = 0usize;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // 只删顶层"文件"，绝不进子目录、绝不动目录本身
+            let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+            if !is_file {
+                continue;
+            }
+            let name = match path.file_name().and_then(|s| s.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if !name.starts_with(".sync-tmp-") {
+                continue;
+            }
+            match fs::remove_file(&path) {
+                Ok(_) => {
+                    log::info!("[sync] 启动清理临时孤儿文件: {}", path.display());
+                    removed += 1;
+                }
+                Err(e) => {
+                    log::warn!("[sync] 删除孤儿临时文件 {} 失败: {}", path.display(), e);
+                }
+            }
+        }
+        removed
+    }
 }
 
 // ─── 辅助函数 ─────────────────────────────────
@@ -554,6 +603,66 @@ fn settings_file_name() -> &'static str {
 }
 
 /// 本机设备名作为云端 ZIP 文件名（同一 WebDAV 下多设备互不覆盖）
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+
+    /// 临时目录内放 4 类文件：3 个 `.sync-tmp-*` 应被删，2 个业务文件必须保留。
+    /// 同时放一个同名前缀的子目录 + 子目录内同名前缀文件，验证"不递归子目录"。
+    #[test]
+    fn cleanup_orphan_temp_files_strict_prefix_only() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kb-sync-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+
+        // 应删
+        File::create(tmp.join(".sync-tmp-app.db")).unwrap();
+        File::create(tmp.join(".sync-tmp-upload.zip")).unwrap();
+        File::create(tmp.join(".sync-tmp-pull.zip")).unwrap();
+        // 不应删（前缀近似但不完全匹配）
+        File::create(tmp.join("sync-tmp-app.db")).unwrap(); // 缺前导点
+        File::create(tmp.join("app.db")).unwrap(); // 业务数据库
+        File::create(tmp.join("settings.json")).unwrap();
+        File::create(tmp.join(".sync_tmp.bak")).unwrap(); // 下划线非连字符
+        // 子目录及子目录内的同名前缀文件（不应被递归删除）
+        let sub = tmp.join("pdfs");
+        fs::create_dir_all(&sub).unwrap();
+        File::create(sub.join(".sync-tmp-fake.zip")).unwrap();
+
+        let removed = SyncService::cleanup_orphan_temp_files(&tmp);
+        assert_eq!(removed, 3, "应只删顶层 3 个匹配文件");
+
+        assert!(!tmp.join(".sync-tmp-app.db").exists());
+        assert!(!tmp.join(".sync-tmp-upload.zip").exists());
+        assert!(!tmp.join(".sync-tmp-pull.zip").exists());
+        assert!(tmp.join("sync-tmp-app.db").exists(), "无点前缀不应删");
+        assert!(tmp.join("app.db").exists(), "业务文件必须保留");
+        assert!(tmp.join("settings.json").exists());
+        assert!(tmp.join(".sync_tmp.bak").exists(), "下划线变体不应误删");
+        assert!(sub.join(".sync-tmp-fake.zip").exists(), "子目录不应被递归扫描");
+
+        // 收尾
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn cleanup_returns_zero_for_nonexistent_dir() {
+        let nowhere = std::path::PathBuf::from(format!(
+            "{}/does-not-exist-{}",
+            std::env::temp_dir().display(),
+            std::process::id()
+        ));
+        let removed = SyncService::cleanup_orphan_temp_files(&nowhere);
+        assert_eq!(removed, 0, "目录不存在时不应 panic，返回 0");
+    }
+}
+
 fn device_zip_name() -> String {
     let device = hostname::get()
         .map(|h| h.to_string_lossy().into_owned())

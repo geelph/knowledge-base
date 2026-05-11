@@ -16,7 +16,7 @@ use tauri::{Emitter, Runtime};
 
 use crate::database::Database;
 use crate::error::AppError;
-use crate::models::{NoteInput, SyncPullResult};
+use crate::models::{NoteInput, SyncManifestV1, SyncPullResult};
 
 use super::backend::SyncBackendImpl;
 use super::manifest;
@@ -61,6 +61,23 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
         }
     };
 
+    // hash 算法兼容性检查（v1 → v2 升级）：
+    // 远端 manifest 不带 hash_algo（旧客户端写的）且有内容 → 当前的 v2 公式与远端不一致，
+    // diff 会把所有笔记误判为变更。处理：清空本机 sync_remote_state（防止误判跳过），
+    // 本次 pull 直接退出；下次 push 会把本地全部笔记当作首次推送，写出 v2 格式 manifest 完成升级。
+    if !remote.entries.is_empty()
+        && remote.hash_algo.as_deref() != Some(SyncManifestV1::HASH_ALGO_V2)
+    {
+        log::warn!(
+            "[sync_v1] backend {} 远端 manifest 用旧 hash 算法 ({:?})，跳过本次 pull 并清空本地 sync_remote_state；下次 push 将全量重传升级到 v2",
+            backend_id,
+            remote.hash_algo
+        );
+        let cleared = db.clear_remote_state_for_backend(backend_id)?;
+        log::info!("[sync_v1] 已清空 {} 条 sync_remote_state（backend {}）", cleared, backend_id);
+        return Ok(result);
+    }
+
     let local = manifest::compute_local_manifest(db, app_version, device)?;
 
     let _ = emitter.emit(
@@ -99,82 +116,78 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
             }
         };
         let (title, content) = parse_note_md(&body, &entry.title);
+        let folder_id = ensure_folder_path(db, &entry.folder_path)?;
+        let input = NoteInput {
+            title,
+            content,
+            folder_id,
+        };
 
-        // 本地有这条吗？
-        let parsed_id: i64 = entry.stable_id.parse().unwrap_or(-1);
-        if parsed_id > 0 {
-            // upsert：先尝试 update，失败再 insert（v1 简化）
-            let exists = db.get_note(parsed_id).ok().flatten().is_some();
-            let folder_id = ensure_folder_path(db, &entry.folder_path)?;
-            let input = NoteInput {
-                title,
-                content: content.clone(),
-                folder_id,
-            };
-            let res = if exists {
-                db.update_note(parsed_id, &input)
-            } else {
-                db.create_note(&input)
-            };
-            match res {
-                Ok(_) => {
-                    result.downloaded += 1;
-                    if let Err(e) = db.upsert_remote_state(
-                        backend_id,
-                        parsed_id.max(1),
-                        &entry.remote_path,
-                        &entry.content_hash,
-                        &entry.updated_at,
-                        false,
-                    ) {
-                        result
-                            .errors
-                            .push(format!("upsert sync_remote_state 失败: {}", e));
-                    }
-                }
+        // T-S011：entry.stable_id 现在是 UUID（v36）。先按 stable_uuid 查本地 → 决定 update/create
+        let local_id_for_state = match db.get_note_id_by_stable_uuid(&entry.stable_id)? {
+            Some(local_id) => match db.update_note(local_id, &input) {
+                Ok(_) => Some(local_id),
                 Err(e) => {
                     result
                         .errors
-                        .push(format!("写入本地笔记失败 {}: {}", entry.title, e));
+                        .push(format!("更新本地笔记失败 {}: {}", entry.title, e));
+                    None
+                }
+            },
+            None => {
+                // 本地没有 → 用远端 UUID 创建（保持多端 ID 稳定）
+                match db.create_note_with_uuid(&input, &entry.stable_id) {
+                    Ok(n) => Some(n.id),
+                    Err(e) => {
+                        result
+                            .errors
+                            .push(format!("新建本地笔记失败 {}: {}", entry.title, e));
+                        None
+                    }
                 }
             }
-        } else {
-            // stable_id 解析失败 → 一律新建
-            let folder_id = ensure_folder_path(db, &entry.folder_path)?;
-            let input = NoteInput {
-                title,
-                content,
-                folder_id,
-            };
-            if let Err(e) = db.create_note(&input) {
-                result.errors.push(format!("新建本地笔记失败: {}", e));
-            } else {
-                result.downloaded += 1;
+        };
+
+        if let Some(local_id) = local_id_for_state {
+            result.downloaded += 1;
+            if let Err(e) = db.upsert_remote_state(
+                backend_id,
+                local_id,
+                &entry.remote_path,
+                &entry.content_hash,
+                &entry.updated_at,
+                false,
+            ) {
+                result
+                    .errors
+                    .push(format!("upsert sync_remote_state 失败: {}", e));
             }
         }
     }
 
     // ── 处理 to_delete_local（远端 tombstone）
     for entry in &diff.to_delete_local {
-        let parsed_id: i64 = entry.stable_id.parse().unwrap_or(-1);
-        if parsed_id > 0 {
-            match db.soft_delete_note(parsed_id) {
-                Ok(true) => {
-                    result.deleted_local += 1;
-                    let _ = db.upsert_remote_state(
-                        backend_id,
-                        parsed_id,
-                        &entry.remote_path,
-                        &entry.content_hash,
-                        &entry.updated_at,
-                        true,
-                    );
-                }
-                Ok(false) => {} // 本地已没有
-                Err(e) => result
-                    .errors
-                    .push(format!("软删本地失败 {}: {}", entry.title, e)),
+        // T-S011：按 stable_uuid 找本地 id，没找到说明本地本就没有此笔记，跳过
+        let local_id = match db.get_note_id_by_stable_uuid(&entry.stable_id)? {
+            Some(id) => id,
+            None => continue,
+        };
+        match db.soft_delete_note(local_id) {
+            Ok(true) => {
+                result.deleted_local += 1;
+                let _ = db.upsert_remote_state(
+                    backend_id,
+                    local_id,
+                    &entry.remote_path,
+                    &entry.content_hash,
+                    &entry.updated_at,
+                    true,
+                );
             }
+            Ok(false) => {} // 本地已没有
+            Err(e) => result
+                .errors
+                .push(format!("软删本地失败 {}: {}", entry.title, e)),
         }
     }
 

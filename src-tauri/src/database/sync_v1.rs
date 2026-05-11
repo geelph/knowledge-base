@@ -247,6 +247,21 @@ impl Database {
         Ok(())
     }
 
+    /// 清空某 backend 下所有 sync_remote_state 行
+    ///
+    /// 用于 hash 算法升级（v1 → v2）：远端 manifest 是旧算法时调本方法，
+    /// 本机失去与该远端的同步状态映射 → 下次 push 会把本地全部笔记当作新增上传，
+    /// 下次 pull 跳过（避免按旧 hash 误 diff）。
+    pub fn clear_remote_state_for_backend(&self, backend_id: i64) -> Result<usize, AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let affected =
+            conn.execute("DELETE FROM sync_remote_state WHERE backend_id = ?1", [backend_id])?;
+        Ok(affected)
+    }
+
     /// 物理删除已确认 tombstone 推送完成的状态行
     ///
     /// 预留给 T-024 后续阶段：tombstone 同步成功后清理 sync_remote_state

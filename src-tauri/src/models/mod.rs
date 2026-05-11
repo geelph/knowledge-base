@@ -1278,7 +1278,10 @@ pub struct ManifestEntry {
     /// 稳定 ID（v1 临时 = 本地笔记 id 的字符串形式）
     pub stable_id: String,
     pub title: String,
-    /// SHA-256(title + "\n" + content)，hex 小写
+    /// 笔记内容指纹，hex 小写。具体公式见 SyncManifestV1.hash_algo：
+    /// - 缺失（旧客户端）= `SHA-256(title + "\n" + content)`
+    /// - "v2"（当前）  = `SHA-256(title + "\n" + notes.content_hash)`，复用 v22 起的 notes.content_hash 列，
+    ///   manifest 计算时无需再读 content，大库内存与 IO 显著下降
     pub content_hash: String,
     /// ISO-8601 / 本地时间字符串（来自 notes.updated_at）
     pub updated_at: String,
@@ -1306,10 +1309,17 @@ pub struct SyncManifestV1 {
     pub generated_at: String,
     /// 全部笔记条目（含 tombstone）
     pub entries: Vec<ManifestEntry>,
+    /// hash 算法标识。"v2" = `SHA-256(title + "\n" + notes.content_hash)`，复用现有列免读 content。
+    /// 字段缺失视为旧 v1 算法 = `SHA-256(title + "\n" + content)`，pull/push 时会清空本地
+    /// sync_remote_state 触发首次全量重推升级到 v2。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_algo: Option<String>,
 }
 
 impl SyncManifestV1 {
     pub const VERSION: u32 = 1;
+    /// 当前 hash 算法标识。pull/push 时检测远端 manifest 的 hash_algo 是否匹配。
+    pub const HASH_ALGO_V2: &'static str = "v2";
 }
 
 /// 推送结果

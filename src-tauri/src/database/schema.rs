@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::error::AppError;
 
 /// 当前 Schema 版本
-pub const SCHEMA_VERSION: i32 = 35;
+pub const SCHEMA_VERSION: i32 = 36;
 
 /// 获取数据库版本
 pub fn get_version(conn: &Connection) -> Result<i32, AppError> {
@@ -65,6 +65,7 @@ pub fn migrate(conn: &Connection) -> Result<(), AppError> {
             32 => migrate_v32_to_v33(conn)?,
             33 => migrate_v33_to_v34(conn)?,
             34 => migrate_v34_to_v35(conn)?,
+            35 => migrate_v35_to_v36(conn)?,
             _ => {
                 return Err(AppError::Custom(format!("未知的数据库版本: {}", version)));
             }
@@ -1441,5 +1442,55 @@ fn migrate_v34_to_v35(conn: &Connection) -> Result<(), AppError> {
     }
 
     set_version(conn, 35)?;
+    Ok(())
+}
+
+/// v35 -> v36: notes.stable_uuid 多端稳定标识（T-S010 同步重构）
+///
+/// 同步 V1 manifest 中的 `stable_id` 早期版本直接用本地 i64 主键 → 多端撞车
+/// （A 的 note_id=5 和 B 的 note_id=5 各是不同笔记，同步到一起会复制错乱）。
+///
+/// 这里加 `notes.stable_uuid TEXT`：
+/// - 现有存量笔记由本迁移一次性生成 UUID v4 回填（在单个事务里完成）
+/// - DAO 在 `create_note` 时同步生成 UUID 写入
+/// - 用**部分唯一索引** `WHERE stable_uuid IS NOT NULL` 保护 UNIQUE 约束，
+///   兼容 NULL 行（理论上 backfill 完成后不会有 NULL，但为防御老库异常路径）
+///
+/// 注意：SQLite `ALTER TABLE ADD COLUMN` 不支持加 `NOT NULL`（除非有静态 DEFAULT），
+/// UUID 必须 Rust 侧生成而非 SQL，所以"列允许 NULL + 单独 UNIQUE 索引"是唯一方案。
+fn migrate_v35_to_v36(conn: &Connection) -> Result<(), AppError> {
+    log::info!("数据库迁移: v35 -> v36 (notes.stable_uuid 多端稳定标识)");
+
+    let cols = list_columns(conn, "notes")?;
+    if !cols.iter().any(|c| c == "stable_uuid") {
+        conn.execute_batch("ALTER TABLE notes ADD COLUMN stable_uuid TEXT;")?;
+    }
+
+    // backfill：对 stable_uuid IS NULL 的行（幂等可重跑）生成 UUID v4
+    let mut stmt = conn.prepare("SELECT id FROM notes WHERE stable_uuid IS NULL")?;
+    let ids: Vec<i64> = stmt
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+
+    log::info!("[v36] 准备回填 {} 条笔记的 stable_uuid", ids.len());
+    let tx = conn.unchecked_transaction()?;
+    for id in &ids {
+        let uuid = uuid::Uuid::new_v4().to_string();
+        tx.execute(
+            "UPDATE notes SET stable_uuid = ?1 WHERE id = ?2",
+            rusqlite::params![uuid, id],
+        )?;
+    }
+    tx.commit()?;
+
+    // 部分唯一索引：只对非 NULL 行强制唯一（NULL 行被排除，防御性的，正常路径不会出现）
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_stable_uuid
+         ON notes(stable_uuid) WHERE stable_uuid IS NOT NULL;",
+    )?;
+
+    set_version(conn, 36)?;
     Ok(())
 }
