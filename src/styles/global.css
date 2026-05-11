@@ -1759,9 +1759,10 @@ body,
   min-height: 0;
 }
 
-/* ── 侧边栏 / 设置页锚点导航：禁止鼠标拖选文本（纯导航区，拖选只会显得乱） ── */
+/* ── 侧边栏 / 锚点导航 / 卡片标题：禁止鼠标拖选文本（纯导航 & 标题区，拖选只会显得乱） ── */
 .activity-bar,
-.anchor-page-nav {
+.anchor-page-nav,
+.ant-card-head-title {
   user-select: none;
   -webkit-user-select: none;
 }
