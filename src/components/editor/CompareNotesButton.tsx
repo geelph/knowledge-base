@@ -12,12 +12,16 @@ import type { Editor } from "@tiptap/react";
 import { noteApi } from "@/lib/api";
 import type { Note } from "@/types";
 import { DiffMergeModal, type DiffSide } from "./DiffMergeModal";
-import { getNoteMarkdown, tidyNoteMarkdown } from "./markdownDiffUtil";
 
 interface Props {
   editor: Editor;
   /** 当前笔记 id；用于排除自身、保存时写回 */
   noteId?: number;
+}
+
+function getEditorMarkdown(editor: Editor): string {
+  const storage = editor.storage as { markdown?: { getMarkdown: () => string } };
+  return storage.markdown?.getMarkdown() ?? editor.getText({ blockSeparator: "\n\n" });
 }
 
 export function CompareNotesButton({ editor, noteId }: Props) {
@@ -30,8 +34,7 @@ export function CompareNotesButton({ editor, noteId }: Props) {
   const [left, setLeft] = useState<DiffSide>({ label: "", value: "", editable: true });
   const [right, setRight] = useState<DiffSide>({ label: "当前笔记", value: "", editable: true });
   const otherNoteRef = useRef<Note | null>(null);
-  const baseLeftRef = useRef<string>(""); // 另一篇笔记打开时的 (tidy 后) markdown 基线
-  const baseRightRef = useRef<string>(""); // 当前笔记打开时的 markdown 基线
+  const baseRightRef = useRef<string>("");
 
   const loadOptions = useCallback(
     async (keyword?: string) => {
@@ -64,11 +67,9 @@ export function CompareNotesButton({ editor, noteId }: Props) {
         return;
       }
       otherNoteRef.current = other;
-      const curMd = getNoteMarkdown(editor);
-      const otherMd = tidyNoteMarkdown(other.content);
+      const curMd = getEditorMarkdown(editor);
       baseRightRef.current = curMd;
-      baseLeftRef.current = otherMd;
-      setLeft({ label: other.title || `笔记 #${otherId}`, value: otherMd, editable: true });
+      setLeft({ label: other.title || `笔记 #${otherId}`, value: other.content, editable: true });
       setRight({ label: "当前笔记 (markdown)", value: curMd, editable: true });
       setPickerOpen(false);
       setMergeOpen(true);
@@ -81,7 +82,7 @@ export function CompareNotesButton({ editor, noteId }: Props) {
     const other = otherNoteRef.current;
     let touched = false;
     // 另一篇笔记：content 本就是 markdown，直接保存
-    if (other && editedLeft !== baseLeftRef.current) {
+    if (other && editedLeft !== other.content) {
       await noteApi.update(other.id, {
         title: other.title,
         content: editedLeft,
