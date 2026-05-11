@@ -7,12 +7,15 @@
  *
  * 保存：onSave 提供时右下角出现「保存更改」，回调拿到两侧编辑后的最终文本，由调用方决定怎么写回。
  *
- * 实现要点：MergeView 是命令式 DOM 库，需要一个已挂载的容器节点 —— 用 **callback ref** 在 div 真正
- * 挂进 DOM 那一刻创建（避免 antd Modal 的内容异步挂载导致 `useEffect` 里 ref 还是 null、整片空白）。
- * 配合 Modal `destroyOnClose`：关弹窗时 div 卸载 → callback ref 收到 null → 销毁；重开时拿到新内容重建。
+ * 实现要点：
+ *  1. MergeView 是命令式 DOM 库，需要一个已挂载且**有固定高度**的容器 —— 用 callback ref 在 div 真正挂进
+ *     DOM 那一刻创建（避免 antd Modal 内容异步挂载导致 useEffect 里 ref 还是 null、整片空白）。
+ *  2. CodeMirror 的 MergeView 不自动同步两侧滚动 —— 这里手动监听两个 .cm-scroller 的 scroll，按比例镜像
+ *     scrollTop（带防抖锁防回环），并提供「同步滚动」开关。
+ *  3. 两侧文本先把 \r\n 归一成 \n，否则一边带 \r、一边不带会被判成"整篇每行都变了"。
  */
 import { useCallback, useRef, useState } from "react";
-import { Alert, Button, Modal, Space } from "antd";
+import { Alert, Button, Modal, Space, Switch } from "antd";
 import { MergeView } from "@codemirror/merge";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
@@ -36,9 +39,12 @@ interface Props {
   saveHint?: string;
 }
 
-// 高度：用 .cm-scroller 的 maxHeight 直接限高（不走 height:100% 链，更稳）；短内容也给个 minHeight
-const sizingTheme = EditorView.theme({
-  ".cm-scroller": { overflowY: "auto", maxHeight: "62vh", minHeight: "160px" },
+const normalizeEol = (s: string) => s.replace(/\r\n/g, "\n");
+
+// CM 主题：让编辑器填满（高度由外层 host div 固定）
+const fillTheme = EditorView.theme({
+  "&": { height: "100%" },
+  ".cm-scroller": { overflow: "auto" },
 });
 const darkTheme = EditorView.theme(
   {
@@ -71,40 +77,77 @@ function sideExtensions(editable: boolean, dark: boolean) {
     lineNumbers(),
     EditorView.lineWrapping,
     markdown(),
-    sizingTheme,
+    fillTheme,
     dark ? darkTheme : lightTheme,
     EditorView.editable.of(editable),
     ...(editable ? [] : [EditorState.readOnly.of(true)]),
   ];
 }
 
+/** 两侧 .cm-scroller 按比例镜像 scrollTop；返回清理函数 */
+function linkScrollers(a: HTMLElement, b: HTMLElement, enabledRef: React.MutableRefObject<boolean>) {
+  let lock = false;
+  const mirror = (src: HTMLElement, dst: HTMLElement) => {
+    if (!enabledRef.current || lock) return;
+    lock = true;
+    const srcMax = src.scrollHeight - src.clientHeight;
+    const dstMax = dst.scrollHeight - dst.clientHeight;
+    dst.scrollTop = srcMax > 0 ? (src.scrollTop / srcMax) * dstMax : 0;
+    requestAnimationFrame(() => {
+      lock = false;
+    });
+  };
+  const onA = () => mirror(a, b);
+  const onB = () => mirror(b, a);
+  a.addEventListener("scroll", onA, { passive: true });
+  b.addEventListener("scroll", onB, { passive: true });
+  return () => {
+    a.removeEventListener("scroll", onA);
+    b.removeEventListener("scroll", onB);
+  };
+}
+
 export function DiffMergeModal({ open, onClose, left, right, onSave, saveHint }: Props) {
   const dark = useAppStore((s) => s.themeCategory) === "dark";
   const mvRef = useRef<MergeView | null>(null);
-  // callback ref 用 [] 依赖，闭包里读不到最新 props；用一个 ref 兜住最新值
+  const unlinkRef = useRef<(() => void) | null>(null);
+  // callback ref 的 [] 依赖闭包读不到最新 props，用 ref 兜住
   const latest = useRef({ left, right, dark });
   latest.current = { left, right, dark };
   const [saving, setSaving] = useState(false);
+  const [syncScroll, setSyncScroll] = useState(true);
+  const syncScrollRef = useRef(true);
+  syncScrollRef.current = syncScroll;
 
-  // div 挂载 → 创建 MergeView；卸载（destroyOnClose）→ 销毁
+  const teardown = () => {
+    unlinkRef.current?.();
+    unlinkRef.current = null;
+    mvRef.current?.destroy();
+    mvRef.current = null;
+  };
+
+  // div 挂载 → 创建 MergeView + 装滚动同步；卸载（destroyOnClose）→ 全部销毁
   const setHostEl = useCallback((el: HTMLDivElement | null) => {
-    if (mvRef.current) {
-      mvRef.current.destroy();
-      mvRef.current = null;
-    }
+    teardown();
     if (!el) return;
     const { left, right, dark } = latest.current;
-    mvRef.current = new MergeView({
-      a: { doc: left.value, extensions: sideExtensions(left.editable, dark) },
-      b: { doc: right.value, extensions: sideExtensions(right.editable, dark) },
+    const mv = new MergeView({
+      a: { doc: normalizeEol(left.value), extensions: sideExtensions(left.editable, dark) },
+      b: { doc: normalizeEol(right.value), extensions: sideExtensions(right.editable, dark) },
       parent: el,
       orientation: "a-b",
-      // 中缝 ▶：把左(a)的变更块覆盖到右(b)。右侧 = 最终结果。
-      revertControls: "a-to-b",
+      revertControls: "a-to-b", // 中缝 ▶：把左(a)的变更块覆盖到右(b)。右侧 = 最终结果。
       highlightChanges: true,
       gutter: true,
-      collapseUnchanged: { margin: 3, minSize: 4 },
+      collapseUnchanged: { margin: 3, minSize: 6 },
     });
+    mvRef.current = mv;
+    // 等一帧让 DOM 布局完成再装滚动监听
+    requestAnimationFrame(() => {
+      if (mvRef.current !== mv) return;
+      unlinkRef.current = linkScrollers(mv.a.scrollDOM, mv.b.scrollDOM, syncScrollRef);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleSave() {
@@ -116,7 +159,6 @@ export function DiffMergeModal({ open, onClose, left, right, onSave, saveHint }:
       await onSave({ left: leftDoc, right: rightDoc });
       onClose();
     } catch (e) {
-      // 调用方应在 onSave 内自行 message.error；这里只兜底打日志
       console.error("[DiffMergeModal] onSave 失败:", e);
     } finally {
       setSaving(false);
@@ -145,18 +187,30 @@ export function DiffMergeModal({ open, onClose, left, right, onSave, saveHint }:
     >
       <div
         style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
           fontSize: 12,
           color: "var(--ant-color-text-secondary, #888)",
           marginBottom: 6,
         }}
       >
-        左 = {left.label}
-        {left.editable ? "" : "（只读）"}，右 = {right.label}
-        {right.editable ? "" : "（只读）"}。中缝 ▶ 把左侧变更块覆盖到右侧；两栏均可直接编辑。
+        <span>
+          左 = {left.label}
+          {left.editable ? "" : "（只读）"}，右 = {right.label}
+          {right.editable ? "" : "（只读）"}。中缝 ▶ 把左侧变更块覆盖到右侧；两栏均可直接编辑。
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <span>同步滚动</span>
+          <Switch size="small" checked={syncScroll} onChange={setSyncScroll} />
+        </span>
       </div>
       <div
         ref={setHostEl}
         style={{
+          height: "64vh",
+          display: "flex",
+          flexDirection: "column",
           border: "1px solid var(--ant-color-border-secondary, #eee)",
           borderRadius: 6,
           overflow: "hidden",
