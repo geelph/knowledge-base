@@ -58,22 +58,71 @@ impl SyncBackendImpl for WebdavBackend {
         block_on(self.client.upload_bytes(path, content.as_bytes().to_vec()))
     }
 
-    /// T-S031: 并发批量上传（Semaphore=8）
+    /// T-S031 + 限流加固：并发批量上传
     ///
-    /// 单 PUT 走 100-300ms RTT，串行 5000 条 ≈ 8-25 分钟；
-    /// 8 路并发理论上 ≈ 1-3 分钟（瓶颈转到服务器带宽或 keep-alive 连接数）。
-    ///
-    /// 复用 reqwest 全局 client（HTTP/1.1 keep-alive 池），不会因为并发新建多个 TCP/TLS。
+    /// 上传速度 vs 服务器限流（nginx `limit_req` 触发 → 503）之间取平衡：
+    ///   1. 先把所有要写入的父目录 MKCOL **一遍**（不是每篇都来一次）→ 请求数砍一半；撞 5xx 退避重试一次，
+    ///      仍失败 → 整批中止，返回一条清晰的"服务器繁忙/限流"错误（避免几十行 503 HTML）。
+    ///   2. 目录就绪后逐条 PUT（`put_into_existing_dir`，不再 MKCOL），**4 路并发**（8 路太猛、易触发限流）。
+    ///   3. 单条 PUT 撞 5xx（限流/网关）时**指数退避重试**（共 3 次：立即 / +1s / +3s）→ 偶发限流自愈，不直接判失败。
     fn batch_put_notes(&self, items: &[(String, String)]) -> Vec<Result<(), AppError>> {
         if items.is_empty() {
             return vec![];
         }
+        use std::collections::HashSet;
         use std::sync::Arc;
         use tokio::sync::Semaphore;
 
-        let sem = Arc::new(Semaphore::new(8));
-        let owned: Vec<(String, String)> = items.to_vec();
+        // ── 1. 一次性 MKCOL 所有父目录（带 1 次退避重试）──
+        let parent_dirs: Vec<String> = {
+            let mut set: HashSet<String> = HashSet::new();
+            for (path, _) in items {
+                if let Some((dir, _)) = path.rsplit_once('/') {
+                    if !dir.is_empty() {
+                        set.insert(dir.to_string());
+                    }
+                }
+            }
+            set.into_iter().collect()
+        };
+        let ensure_err: Option<AppError> = block_on(async {
+            for attempt in 0..2u8 {
+                let mut err: Option<AppError> = None;
+                for d in &parent_dirs {
+                    if let Err(e) = self.client.ensure_dir(d).await {
+                        err = Some(e);
+                        break;
+                    }
+                }
+                match err {
+                    None => return None,
+                    Some(e) => {
+                        if attempt == 0 && is_transient_server_err(&e.to_string()) {
+                            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                            continue;
+                        }
+                        return Some(e);
+                    }
+                }
+            }
+            None
+        });
+        if let Some(e) = ensure_err {
+            let msg = e.to_string();
+            let condensed = if is_transient_server_err(&msg) {
+                "WebDAV 服务器繁忙 / 被限流（返回 5xx），本次推送已中止。多半是并发请求太多触发了服务器 nginx 限速，稍后再试即可；若一直这样，多半是该 WebDAV 服务负载偏低。".to_string()
+            } else {
+                format!(
+                    "远端目录创建失败，本次推送已中止：{}",
+                    msg.lines().next().unwrap_or(&msg)
+                )
+            };
+            return vec![Err(AppError::Custom(condensed))];
+        }
 
+        // ── 2. 4 路并发逐条 PUT（目录已就绪，不再 MKCOL）；单条撞 5xx 指数退避重试 ──
+        let sem = Arc::new(Semaphore::new(4));
+        let owned: Vec<(String, String)> = items.to_vec();
         block_on(async move {
             let mut handles = Vec::with_capacity(owned.len());
             for (path, content) in owned {
@@ -82,11 +131,32 @@ impl SyncBackendImpl for WebdavBackend {
                 handles.push(tokio::spawn(async move {
                     let _permit = match sem.acquire_owned().await {
                         Ok(p) => p,
-                        Err(_) => {
-                            return Err(AppError::Custom("Semaphore 已关闭".into()))
-                        }
+                        Err(_) => return Err(AppError::Custom("Semaphore 已关闭".into())),
                     };
-                    client.upload_bytes(&path, content.into_bytes()).await
+                    let bytes = content.into_bytes();
+                    // 3 次尝试：立即 / +1s / +3s；只对临时性 5xx 重试
+                    let backoffs = [0u64, 1000, 3000];
+                    let mut last: Result<(), AppError> = Ok(());
+                    for (i, delay_ms) in backoffs.iter().enumerate() {
+                        if *delay_ms > 0 {
+                            tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+                        }
+                        match client.put_into_existing_dir(&path, bytes.clone()).await {
+                            Ok(()) => {
+                                last = Ok(());
+                                break;
+                            }
+                            Err(e) => {
+                                let retry = i + 1 < backoffs.len()
+                                    && is_transient_server_err(&e.to_string());
+                                last = Err(e);
+                                if !retry {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    last
                 }));
             }
             let mut out = Vec::with_capacity(handles.len());
@@ -146,6 +216,19 @@ impl SyncBackendImpl for WebdavBackend {
     }
 }
 
+/// 错误信息看着像"服务器繁忙 / 限流 / 网关挂了"这类**临时性 5xx**吗？
+/// 用于决定要不要退避重试 + 给用户一条"过会儿再试"而不是一坨 503 HTML。
+fn is_transient_server_err(msg: &str) -> bool {
+    msg.contains("503")
+        || msg.contains("502")
+        || msg.contains("504")
+        || msg.contains("Service Unavailable")
+        || msg.contains("Service Temporarily Unavailable")
+        || msg.contains("Bad Gateway")
+        || msg.contains("Gateway Time-out")
+        || msg.contains("Gateway Timeout")
+}
+
 /// 从 PROPFIND href 列表提取附件 hash（纯函数，便于单测）
 ///
 /// 规则：跳过目录（href 以 `/` 结尾）、跳过 `_` 开头的特殊文件、跳过 manifest.json；
@@ -197,5 +280,14 @@ mod tests {
     #[test]
     fn hrefs_to_attachment_hashes_empty_input() {
         assert!(hrefs_to_attachment_hashes(&[]).is_empty());
+    }
+
+    #[test]
+    fn transient_server_err_detection() {
+        assert!(is_transient_server_err("MKCOL notes 失败 (503 Service Unavailable): <html>..."));
+        assert!(is_transient_server_err("上传失败，服务器返回 502 Bad Gateway"));
+        assert!(is_transient_server_err("504 Gateway Time-out"));
+        assert!(!is_transient_server_err("认证失败，请检查用户名/密码"));
+        assert!(!is_transient_server_err("MKCOL notes 失败 (409 Conflict)"));
     }
 }

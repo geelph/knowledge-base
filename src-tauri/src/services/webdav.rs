@@ -193,7 +193,14 @@ impl WebDavClient {
                 self.ensure_dir(parent).await?;
             }
         }
+        self.put_into_existing_dir(path, bytes).await
+    }
 
+    /// 把内存字节流 PUT 到指定路径，**不** MKCOL 父目录（调用方需保证父目录已存在）。
+    ///
+    /// 用于 `batch_put_notes`：一次性把目录 MKCOL 好后，逐条 PUT 不再重复 MKCOL，
+    /// 请求数砍一半 —— 少触发服务器（nginx）的 `limit_req` 限流（限流时 nginx 返回 503）。
+    pub async fn put_into_existing_dir(&self, path: &str, bytes: Vec<u8>) -> Result<(), AppError> {
         let resp = self
             .client
             .put(self.file_url(path))
