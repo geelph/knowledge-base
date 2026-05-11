@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useMemo, useState } from "react";
+import { cloneElement, isValidElement, startTransition, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Tooltip, Badge, theme as antdTheme, message } from "antd";
 import { hiddenPinApi } from "@/lib/api";
@@ -192,6 +192,18 @@ export function ActivityBar() {
 
   function renderItem(item: ActivityItem) {
     const isActive = highlightView === item.view;
+    // 图标颜色：直接通过 prop 注入 lucide 组件，绕开 CSS 继承链。
+    // 之前用 <span style="color: inherit"> 桥接 button → svg currentColor 的方案在 antd
+    // Badge wrapper 下失效——ant-badge-children 在某些版本会截断 color 继承，导致点"待办"
+    // 时图标 stroke 不变色。改用 cloneElement 把 color 显式 prop 注入 lucide CheckSquare，
+    // svg stroke 由 prop 直接决定，不再依赖任何祖先 wrapper 的 color 继承行为。
+    const iconColor = isActive ? token.colorPrimary : token.colorTextSecondary;
+    const coloredIcon = isValidElement(item.icon)
+      ? cloneElement(
+          item.icon as React.ReactElement<{ color?: string }>,
+          { color: iconColor },
+        )
+      : item.icon;
     const iconNode =
       item.view === "tasks" ? (
         <Badge
@@ -200,15 +212,10 @@ export function ActivityBar() {
           offset={[2, -2]}
           overflowCount={99}
         >
-          {/* color: inherit 桥接：antd Badge wrapper 默认 color 会截断
-              button → svg currentColor 继承链，导致 isActive 切换时
-              图标 stroke 不变（其他 tab 正常）。 */}
-          <span style={{ color: "inherit", display: "inline-flex" }}>
-            {item.icon}
-          </span>
+          {coloredIcon}
         </Badge>
       ) : (
-        item.icon
+        coloredIcon
       );
 
     return (
