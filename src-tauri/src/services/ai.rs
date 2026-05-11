@@ -1227,12 +1227,17 @@ impl AiService {
 
         let mut stream = response.bytes_stream();
         let mut full_response = String::new();
+        let started = std::time::Instant::now();
+        let mut first_chunk = true;
 
         loop {
             tokio::select! {
                 chunk = stream.next() => {
                     match chunk {
                         Some(Ok(bytes)) => {
+                            if std::mem::take(&mut first_chunk) {
+                                log::info!("[Ollama] 首个响应字节到达，耗时 {:?}（Ollama 已开始返回）", started.elapsed());
+                            }
                             let text = String::from_utf8_lossy(&bytes);
                             for line in text.lines() {
                                 if line.is_empty() { continue; }
@@ -1886,12 +1891,17 @@ impl AiService {
         let mut tool_calls_final: Vec<ToolCallAccum> = Vec::new();
         // UTF-8 chunk 切分 + NDJSON 按 \n 切（同 OpenAI 的处理逻辑）
         let mut buffer: Vec<u8> = Vec::new();
+        let started = std::time::Instant::now();
+        let mut first_chunk = true;
 
         loop {
             tokio::select! {
                 chunk = stream.next() => {
                     match chunk {
                         Some(Ok(bytes)) => {
+                            if std::mem::take(&mut first_chunk) {
+                                log::info!("[Ollama/tools] 首个响应字节到达，耗时 {:?}（含模型加载 + prompt-eval；之后才会逐 token 出）", started.elapsed());
+                            }
                             buffer.extend_from_slice(&bytes);
                             while let Some(pos) = buffer.iter().position(|b| *b == b'\n') {
                                 let line_bytes: Vec<u8> = buffer.drain(..=pos).collect();
