@@ -154,8 +154,10 @@ mod tests {
                 remote_path: "notes/1.md".into(),
                 tombstone: false,
                 folder_path: "工作/周报".into(),
+                encrypted: false,
             }],
             hash_algo: Some(SyncManifestV1::HASH_ALGO_V2.into()),
+            vault: None,
         };
         backend.write_manifest(&m).unwrap();
         let got = backend.read_manifest().unwrap().expect("应能读回 manifest");

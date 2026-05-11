@@ -89,6 +89,7 @@ pub fn push<R: Runtime, E: Emitter<R>>(
         generated_at: String::new(),
         entries: vec![],
         hash_algo: Some(SyncManifestV1::HASH_ALGO_V2.into()),
+        vault: None,
     });
 
     let diff = manifest::diff_manifests(&local, &remote);
@@ -208,6 +209,8 @@ pub fn push<R: Runtime, E: Emitter<R>>(
         }
 
         // 先从 HashMap 拿本地 note_id + content（key 是 stable_uuid）
+        // T-S014：加密笔记的 local_notes content 是占位字符串而非真正内容，
+        // 实际上传的密文走单独路径（按 stable_uuid 查 encrypted_blob）
         let (note_id, title, content, updated_at) = match local_notes.get(&entry.stable_id) {
             Some(v) => v.clone(),
             None => {
@@ -228,10 +231,32 @@ pub fn push<R: Runtime, E: Emitter<R>>(
             }
         }
 
-        // 渲染 .md：第一行 # title，空行，body（如 body 已含 # 标题，可能重复，v1 简化不去重）
-        let md = format_note_md(&title, &content);
+        // T-S014：加密笔记走密文上传分支
+        let body_to_upload: String = if entry.encrypted {
+            match db.get_note_crypto_state_by_uuid(&entry.stable_id) {
+                Ok(Some((true, Some(blob)))) => {
+                    use base64::Engine as _;
+                    base64::engine::general_purpose::STANDARD.encode(&blob)
+                }
+                Ok(_) => {
+                    result.errors.push(format!(
+                        "加密笔记 {} 缺 encrypted_blob，跳过上传",
+                        entry.title
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("读取 encrypted_blob 失败 {}: {}", entry.title, e));
+                    continue;
+                }
+            }
+        } else {
+            format_note_md(&title, &content)
+        };
 
-        match backend.put_note(&entry.remote_path, &md) {
+        match backend.put_note(&entry.remote_path, &body_to_upload) {
             Ok(_) => {
                 if let Err(e) = db.upsert_remote_state(
                     backend_id,
@@ -283,6 +308,7 @@ pub fn push<R: Runtime, E: Emitter<R>>(
             generated_at: String::new(),
             entries: vec![],
             hash_algo: Some(SyncManifestV1::HASH_ALGO_V2.into()),
+            vault: None,
         },
         Err(e) => {
             result

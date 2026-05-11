@@ -78,6 +78,45 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
         return Ok(result);
     }
 
+    // T-S014：vault meta 跨端同步
+    // - 远端有 + 本机无 → 导入（用户用相同密码可解锁）
+    // - 远端有 + 本机有 + salt 不同 → 警告（加密笔记会跳过同步，普通笔记照常）
+    // - 远端有 + 本机有 + salt 相同 → 一致，加密笔记可互通
+    // - 远端无 → 不处理
+    let remote_vault_compatible = match remote.vault.as_ref() {
+        None => false, // 远端没设置 vault → 加密笔记无法跨端
+        Some(meta) => {
+            match crate::services::vault::VaultService::import_meta_if_not_set(db, meta) {
+                Ok(true) => {
+                    log::info!(
+                        "[sync_v1] 本机 vault 从远端 manifest 导入 salt+verifier（首次同步加密笔记）"
+                    );
+                    true
+                }
+                Ok(false) => {
+                    // 本机已有，比对 salt
+                    match crate::services::vault::VaultService::meta_matches(db, meta) {
+                        Ok(true) => true,
+                        Ok(false) => {
+                            log::warn!(
+                                "[sync_v1] 远端 vault salt 与本机不同，加密笔记不参与本次同步"
+                            );
+                            false
+                        }
+                        Err(e) => {
+                            log::warn!("[sync_v1] vault meta 比对失败 {}: 加密笔记跳过", e);
+                            false
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[sync_v1] 导入远端 vault meta 失败: {}（加密笔记跳过）", e);
+                    false
+                }
+            }
+        }
+    };
+
     let local = manifest::compute_local_manifest(db, app_version, device)?;
 
     let _ = emitter.emit(
@@ -115,8 +154,58 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
                 continue;
             }
         };
-        let (title, content) = parse_note_md(&body, &entry.title);
         let folder_id = ensure_folder_path(db, &entry.folder_path)?;
+
+        // T-S014：加密笔记走密文 upsert 分支
+        if entry.encrypted {
+            if !remote_vault_compatible {
+                log::warn!(
+                    "[sync_v1] 跳过加密笔记 {}（vault meta 不匹配或缺失）",
+                    entry.title
+                );
+                continue;
+            }
+            use base64::Engine as _;
+            let blob = match base64::engine::general_purpose::STANDARD.decode(body.as_bytes()) {
+                Ok(b) => b,
+                Err(e) => {
+                    result.errors.push(format!(
+                        "加密笔记 {} base64 解码失败: {}",
+                        entry.title, e
+                    ));
+                    continue;
+                }
+            };
+            match db.upsert_encrypted_note_with_uuid(
+                &entry.stable_id,
+                &entry.title,
+                &blob,
+                folder_id,
+            ) {
+                Ok(local_id) => {
+                    result.downloaded += 1;
+                    if let Err(e) = db.upsert_remote_state(
+                        backend_id,
+                        local_id,
+                        &entry.remote_path,
+                        &entry.content_hash,
+                        &entry.updated_at,
+                        false,
+                    ) {
+                        result
+                            .errors
+                            .push(format!("upsert sync_remote_state 失败: {}", e));
+                    }
+                }
+                Err(e) => result
+                    .errors
+                    .push(format!("写入加密笔记失败 {}: {}", entry.title, e)),
+            }
+            continue;
+        }
+
+        // 非加密笔记：原 markdown 路径
+        let (title, content) = parse_note_md(&body, &entry.title);
         let input = NoteInput {
             title,
             content,

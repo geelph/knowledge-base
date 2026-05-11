@@ -71,6 +71,113 @@ impl Database {
         self.get_note_inner(&conn, id)
     }
 
+    /// 按 stable_uuid 读取笔记的 (is_encrypted, encrypted_blob)（T-S014 同步加密笔记用）
+    ///
+    /// 返回值含义：
+    /// - `Ok(Some((true, Some(blob))))` 加密笔记 + 有密文（正常情况）
+    /// - `Ok(Some((true, None)))` 加密笔记但 blob 为空（数据异常）
+    /// - `Ok(Some((false, _)))` 非加密笔记
+    /// - `Ok(None)` 笔记不存在
+    pub fn get_note_crypto_state_by_uuid(
+        &self,
+        uuid: &str,
+    ) -> Result<Option<(bool, Option<Vec<u8>>)>, AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let row = conn
+            .query_row(
+                "SELECT is_encrypted, encrypted_blob FROM notes WHERE stable_uuid = ?1",
+                params![uuid],
+                |row| {
+                    Ok((
+                        row.get::<_, i32>(0)? != 0,
+                        row.get::<_, Option<Vec<u8>>>(1)?,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// T-S014：用远端 UUID 创建/更新加密笔记
+    ///
+    /// 行为：
+    /// - 本地已有该 stable_uuid → UPDATE encrypted_blob + is_encrypted=1 + content="🔒 已加密"
+    /// - 本地不存在 → INSERT 一条加密笔记（is_encrypted=1，content 占位）
+    ///
+    /// 占位 content 用与 T-007 一致的字符串，FTS 索引到的也是占位，自然过滤；
+    /// content_hash 用 encrypted_blob 的 sha256_hex（与 manifest 算法一致）。
+    pub fn upsert_encrypted_note_with_uuid(
+        &self,
+        uuid: &str,
+        title: &str,
+        encrypted_blob: &[u8],
+        folder_id: Option<i64>,
+    ) -> Result<i64, AppError> {
+        const PLACEHOLDER: &str = "🔒 已加密";
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let normalized = crate::database::links::normalize_title(title);
+        let content_hash = crate::services::hash::sha256_hex(
+            &encrypted_blob
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>(),
+        );
+
+        // 先查是否已存在
+        let existing_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM notes WHERE stable_uuid = ?1",
+                params![uuid],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+
+        if let Some(id) = existing_id {
+            conn.execute(
+                "UPDATE notes SET title = ?1, title_normalized = ?2,
+                        content = ?3, content_hash = ?4,
+                        folder_id = ?5,
+                        is_encrypted = 1, encrypted_blob = ?6,
+                        is_deleted = 0, deleted_at = NULL,
+                        updated_at = datetime('now', 'localtime')
+                 WHERE id = ?7",
+                params![
+                    title,
+                    normalized,
+                    PLACEHOLDER,
+                    content_hash,
+                    folder_id,
+                    encrypted_blob,
+                    id
+                ],
+            )?;
+            Ok(id)
+        } else {
+            conn.execute(
+                "INSERT INTO notes
+                    (title, content, folder_id, title_normalized, content_hash, stable_uuid,
+                     is_encrypted, encrypted_blob)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7)",
+                params![
+                    title,
+                    PLACEHOLDER,
+                    folder_id,
+                    normalized,
+                    content_hash,
+                    uuid,
+                    encrypted_blob
+                ],
+            )?;
+            Ok(conn.last_insert_rowid())
+        }
+    }
+
     /// 按 stable_uuid 查笔记 id（同步 V1 多端 upsert 用）
     ///
     /// `stable_uuid` 是 v36 引入的多端稳定标识。返回值用于 sync_v1 pull 拿到远端 manifest entry 后

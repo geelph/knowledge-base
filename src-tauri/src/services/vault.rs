@@ -186,6 +186,94 @@ impl VaultService {
             .ok_or_else(|| AppError::Custom("vault 未解锁".to_string()))?;
         crypto::aead_decrypt(key, blob)
     }
+
+    // ─── T-S014：vault meta 跨端同步 ─────────────────────────
+
+    /// 读取本机 vault 元数据（salt + verifier 的 base64）。NotSet 态返回 None。
+    pub fn read_meta(db: &Database) -> Result<Option<crate::models::VaultMeta>, AppError> {
+        let salt = db.get_config(CFG_SALT)?;
+        let verifier = db.get_config(CFG_VERIFIER)?;
+        match (salt, verifier) {
+            (Some(s), Some(v)) if !s.is_empty() && !v.is_empty() => {
+                Ok(Some(crate::models::VaultMeta {
+                    salt: s,
+                    verifier: v,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// 从远端 manifest 导入 vault 元数据（首次同步场景：本机无 vault）。
+    ///
+    /// **安全约定**：
+    /// - 本机已设置 vault → 拒绝（避免静默覆盖；冲突需用户手动决断）
+    /// - 本机未设置 vault → 写入 salt+verifier，vault 处于 Locked 态，用户用同步过来的密码解锁即可
+    /// - 导入后本机 vault 状态从 NotSet 变 Locked（解锁需用户输入相同密码）
+    ///
+    /// 注：sync_v1 pull 流程因为无 VaultState 句柄，实际走 `import_meta_if_not_set`。
+    /// 本方法保留给未来"加密笔记同步"显式命令使用（可校验 state 解锁态）。
+    #[allow(dead_code)]
+    pub fn import_meta(
+        db: &Database,
+        state: &RwLock<VaultState>,
+        meta: &crate::models::VaultMeta,
+    ) -> Result<(), AppError> {
+        if Self::status(db, state)? != VaultStatus::NotSet {
+            return Err(AppError::Custom(
+                "本机 vault 已存在，不允许从远端覆盖（同步加密笔记前请确认两端 vault 状态一致）".into(),
+            ));
+        }
+        // 简单验证 base64 可解析（防止脏数据写入）
+        let _ = base64::engine::general_purpose::STANDARD
+            .decode(meta.salt.as_bytes())
+            .map_err(|e| AppError::Custom(format!("远端 vault salt 解析失败: {}", e)))?;
+        let _ = base64::engine::general_purpose::STANDARD
+            .decode(meta.verifier.as_bytes())
+            .map_err(|e| AppError::Custom(format!("远端 vault verifier 解析失败: {}", e)))?;
+        db.set_config(CFG_SALT, &meta.salt)?;
+        db.set_config(CFG_VERIFIER, &meta.verifier)?;
+        Ok(())
+    }
+
+    /// 判定远端 vault meta 是否与本机一致（用于决定加密笔记能否互通）。
+    /// 两端任一未设置 → false；salt 字符串相等 → true（同一 salt 派生同一 key）。
+    pub fn meta_matches(
+        db: &Database,
+        remote: &crate::models::VaultMeta,
+    ) -> Result<bool, AppError> {
+        let local = match Self::read_meta(db)? {
+            Some(m) => m,
+            None => return Ok(false),
+        };
+        Ok(local.salt == remote.salt)
+    }
+
+    /// 同 import_meta，但不依赖 VaultState（同步流程中无 state 句柄可用）
+    ///
+    /// 返回值：
+    /// - `Ok(true)`  本机原先未设置 vault，已成功导入 → 用户用相同密码即可解锁
+    /// - `Ok(false)` 本机已设置过 vault，未导入（保留原 vault）
+    /// - `Err(_)`    base64 解析失败等异常
+    pub fn import_meta_if_not_set(
+        db: &Database,
+        meta: &crate::models::VaultMeta,
+    ) -> Result<bool, AppError> {
+        let has_local =
+            db.get_config(CFG_SALT)?.is_some() || db.get_config(CFG_VERIFIER)?.is_some();
+        if has_local {
+            return Ok(false);
+        }
+        let _ = base64::engine::general_purpose::STANDARD
+            .decode(meta.salt.as_bytes())
+            .map_err(|e| AppError::Custom(format!("远端 vault salt 解析失败: {}", e)))?;
+        let _ = base64::engine::general_purpose::STANDARD
+            .decode(meta.verifier.as_bytes())
+            .map_err(|e| AppError::Custom(format!("远端 vault verifier 解析失败: {}", e)))?;
+        db.set_config(CFG_SALT, &meta.salt)?;
+        db.set_config(CFG_VERIFIER, &meta.verifier)?;
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -201,5 +289,47 @@ mod tests {
         assert!(vs.is_unlocked());
         vs.clear();
         assert!(!vs.is_unlocked());
+    }
+
+    /// T-S014：远端 vault meta 导入与 salt 匹配判定
+    #[test]
+    fn import_meta_if_not_set_writes_on_first_call() {
+        let db = Database::init(":memory:").unwrap();
+        let meta = crate::models::VaultMeta {
+            salt: "AAAAAAAAAAAAAAAAAAAAAA==".into(),
+            verifier: "AAECAwQFBgcICQ==".into(),
+        };
+
+        let first = VaultService::import_meta_if_not_set(&db, &meta).unwrap();
+        assert!(first, "本机原先无 vault，首次应导入");
+
+        // 第二次调用：本机已有，不再覆盖
+        let second = VaultService::import_meta_if_not_set(&db, &meta).unwrap();
+        assert!(!second, "本机已有 vault，不应再次导入");
+
+        // 落库正确
+        let read = VaultService::read_meta(&db).unwrap().unwrap();
+        assert_eq!(read.salt, meta.salt);
+        assert_eq!(read.verifier, meta.verifier);
+
+        // 一致性判定
+        assert!(VaultService::meta_matches(&db, &meta).unwrap());
+        let other = crate::models::VaultMeta {
+            salt: "BBBBBBBBBBBBBBBBBBBBBQ==".into(),
+            verifier: meta.verifier.clone(),
+        };
+        assert!(!VaultService::meta_matches(&db, &other).unwrap());
+    }
+
+    #[test]
+    fn import_meta_if_not_set_rejects_invalid_base64() {
+        let db = Database::init(":memory:").unwrap();
+        let bad = crate::models::VaultMeta {
+            salt: "this is not base64!!!".into(),
+            verifier: "AAECAwQFBgcICQ==".into(),
+        };
+        assert!(VaultService::import_meta_if_not_set(&db, &bad).is_err());
+        // 失败后不应写入
+        assert!(VaultService::read_meta(&db).unwrap().is_none());
     }
 }

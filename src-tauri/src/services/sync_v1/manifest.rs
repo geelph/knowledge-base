@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::database::Database;
 use crate::error::AppError;
 use crate::models::{ManifestEntry, SyncManifestV1};
+use crate::services::hash::sha256_hex;
 
 /// 计算 manifest entry 的 content_hash（v2 算法，SHA-256 hex 小写）
 ///
@@ -64,17 +65,30 @@ pub fn compute_local_manifest(
     //
     // T-S011：stable_id 改用 v36 引入的 notes.stable_uuid 列。
     // T-S012：把"最近 30 天内软删"的笔记一起拉进来，以 tombstone=1 标志推到其他端。
+    // T-S014：读 is_encrypted + encrypted_blob 列，加密笔记的 content_hash 改用 blob 的 hex 算 hash。
     //
     // `WHERE stable_uuid IS NOT NULL` 是防御性约束（v36 backfill 已覆盖全部存量，
     // 但 ALTER TABLE 没加 NOT NULL 约束）—— 极端异常路径下 NULL 行会被排除 manifest，
     // 不会被同步出去（自动隔离损坏数据）。
     let mut stmt = conn.prepare(
-        "SELECT stable_uuid, title, content_hash, updated_at, folder_id, is_deleted, deleted_at
+        "SELECT stable_uuid, title, content_hash, updated_at, folder_id, is_deleted, deleted_at,
+                is_encrypted, encrypted_blob
          FROM notes
          WHERE stable_uuid IS NOT NULL
            AND (is_deleted = 0 OR (is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at >= ?1))",
     )?;
-    let rows: Vec<(String, String, String, String, Option<i64>, i64, Option<String>)> = stmt
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        Option<i64>,
+        i64,
+        Option<String>,
+        i64,
+        Option<Vec<u8>>,
+    )> = stmt
         .query_map(rusqlite::params![tombstone_cutoff], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -86,6 +100,8 @@ pub fn compute_local_manifest(
                 row.get::<_, Option<i64>>(4)?,
                 row.get::<_, i64>(5)?,
                 row.get::<_, Option<String>>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, Option<Vec<u8>>>(8)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -111,11 +127,21 @@ pub fn compute_local_manifest(
         .collect();
 
     let mut entries = Vec::with_capacity(rows.len());
-    for (stable_uuid, title, content_hash_col, updated_at, folder_id, is_deleted, deleted_at) in
-        rows
+    for (
+        stable_uuid,
+        title,
+        content_hash_col,
+        updated_at,
+        folder_id,
+        is_deleted,
+        deleted_at,
+        is_encrypted_int,
+        encrypted_blob,
+    ) in rows
     {
         let path = folder_path_for(&folders_by_id, folder_id);
         let tombstone = is_deleted != 0;
+        let encrypted = is_encrypted_int != 0;
         // tombstone entry 的"变更时间"用 deleted_at（删除时刻）而非原 updated_at，
         // 这样 diff 比较时"软删除时间"才是判定"哪一边更新"的依据
         let ts = if tombstone {
@@ -123,19 +149,36 @@ pub fn compute_local_manifest(
         } else {
             updated_at
         };
+        // T-S014：加密笔记的 content_hash 改用 encrypted_blob 的 hex 算 hash
+        // - notes.content_hash 列对加密笔记存的是占位字符串 ("🔒 已加密") 的 hash，
+        //   多端会被认为内容相同 → 无法触发同步。改用 blob hex 后真正反映密文变更
+        // - blob 为 None（异常路径）→ 用空串 hex 兜底
+        let body_hash = if encrypted {
+            let blob_hex: String = encrypted_blob
+                .as_deref()
+                .map(|b| b.iter().map(|x| format!("{:02x}", x)).collect())
+                .unwrap_or_default();
+            sha256_hex(&blob_hex)
+        } else {
+            content_hash_col
+        };
         entries.push(ManifestEntry {
             stable_id: stable_uuid.clone(),
             title: title.clone(),
-            content_hash: content_hash(&title, &content_hash_col),
+            content_hash: content_hash(&title, &body_hash),
             updated_at: ts,
             remote_path: remote_path_for(&stable_uuid),
             tombstone,
             folder_path: path,
+            encrypted,
         });
     }
 
     // 稳定排序（按 stable_id），方便 manifest 文本 diff 友好
     entries.sort_by(|a, b| a.stable_id.cmp(&b.stable_id));
+
+    // T-S014：附带本机 vault meta（如已设置），让其他端首次同步时能拉到 salt+verifier
+    let vault_meta = crate::services::vault::VaultService::read_meta(db).unwrap_or(None);
 
     Ok(SyncManifestV1 {
         manifest_version: SyncManifestV1::VERSION,
@@ -144,6 +187,7 @@ pub fn compute_local_manifest(
         generated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         entries,
         hash_algo: Some(SyncManifestV1::HASH_ALGO_V2.into()),
+        vault: vault_meta,
     })
 }
 
@@ -236,6 +280,9 @@ pub fn merge_manifests(local: &SyncManifestV1, remote: &SyncManifestV1) -> SyncM
         generated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         entries: merged,
         hash_algo: Some(SyncManifestV1::HASH_ALGO_V2.into()),
+        // T-S014：vault meta 用本地的（本机视角是权威；首次同步时远端独有的 meta 已被
+        // 上层 pull 流程在 read_manifest 时单独 import 写入本机 app_config）
+        vault: local.vault.clone(),
     }
 }
 
@@ -340,6 +387,7 @@ mod tests {
             remote_path: format!("notes/{}.md", id),
             tombstone,
             folder_path: String::new(),
+            encrypted: false,
         }
     }
 
@@ -351,6 +399,7 @@ mod tests {
             generated_at: "2026-04-25 12:00:00".into(),
             entries,
             hash_algo: Some(SyncManifestV1::HASH_ALGO_V2.into()),
+            vault: None,
         }
     }
 
@@ -660,6 +709,133 @@ mod tests {
         assert_eq!(entry.content_hash, expected_hash);
     }
 
+    /// T-S014：upsert_encrypted_note_with_uuid 端到端：远端 UUID + blob → 本地加密笔记
+    #[test]
+    fn upsert_encrypted_note_with_uuid_roundtrip() {
+        let db = Database::init(":memory:").unwrap();
+        let uuid = "12345678-1234-1234-1234-123456789abc";
+        let blob: Vec<u8> = vec![0xde, 0xad, 0xbe, 0xef];
+
+        // 首次：本地没有 → 创建
+        let id1 = db
+            .upsert_encrypted_note_with_uuid(uuid, "我的密笔", &blob, None)
+            .expect("首次 upsert 应成功");
+        assert!(id1 > 0);
+
+        // 验证落库
+        let st = db
+            .get_note_crypto_state_by_uuid(uuid)
+            .unwrap()
+            .expect("应能查到");
+        assert!(st.0, "is_encrypted 必须 true");
+        assert_eq!(st.1.as_deref(), Some(blob.as_slice()), "blob 字节级一致");
+
+        // 二次：同 UUID 不同 blob → update
+        let blob2: Vec<u8> = vec![0xca, 0xfe];
+        let id2 = db
+            .upsert_encrypted_note_with_uuid(uuid, "我的密笔 v2", &blob2, None)
+            .unwrap();
+        assert_eq!(id1, id2, "同 UUID 必须更新原行不新建");
+        let st2 = db.get_note_crypto_state_by_uuid(uuid).unwrap().unwrap();
+        assert_eq!(st2.1.as_deref(), Some(blob2.as_slice()));
+    }
+
+    /// T-S014：vault meta 序列化和反序列化（旧客户端无该字段时反序列化为 None）
+    #[test]
+    fn vault_meta_serde_compatibility() {
+        // 不写 vault 字段
+        let m_no_vault = manifest(vec![]);
+        let json_no = serde_json::to_string(&m_no_vault).unwrap();
+        assert!(!json_no.contains("vault"), "vault=None 时不应序列化出字段");
+
+        // 写 vault 字段
+        let mut m_with = manifest(vec![]);
+        m_with.vault = Some(crate::models::VaultMeta {
+            salt: "c2FsdA==".into(),
+            verifier: "dmVy".into(),
+        });
+        let json_with = serde_json::to_string(&m_with).unwrap();
+        assert!(json_with.contains("\"vault\""));
+        assert!(json_with.contains("\"salt\":\"c2FsdA==\""));
+
+        // 旧 manifest 反序列化
+        let old = r#"{
+            "manifestVersion": 1, "appVersion": "x", "device": "x",
+            "generatedAt": "x", "entries": []
+        }"#;
+        let m: SyncManifestV1 = serde_json::from_str(old).unwrap();
+        assert_eq!(m.vault, None);
+    }
+
+    /// T-S014：加密笔记进 manifest，entry.encrypted=true + content_hash 用 blob hex
+    #[test]
+    fn compute_local_manifest_marks_encrypted_notes() {
+        use crate::models::NoteInput;
+        let db = Database::init(":memory:").unwrap();
+
+        // 创建一条普通笔记
+        let n_normal = db
+            .create_note(&NoteInput {
+                title: "明文".into(),
+                content: "正文".into(),
+                folder_id: None,
+            })
+            .unwrap();
+
+        // 创建一条空笔记，手动改成加密态（模拟 T-007 启用加密路径）
+        let n_enc = db
+            .create_note(&NoteInput {
+                title: "密文".into(),
+                content: "原文".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let fake_blob: Vec<u8> = vec![0x01, 0x02, 0x03, 0x04];
+        {
+            let conn = db.conn_lock().unwrap();
+            conn.execute(
+                "UPDATE notes SET is_encrypted = 1, encrypted_blob = ?1, content = ?2
+                 WHERE id = ?3",
+                rusqlite::params![fake_blob, "🔒 已加密", n_enc.id],
+            )
+            .unwrap();
+        }
+
+        let m = compute_local_manifest(&db, "test", "host").unwrap();
+        assert_eq!(m.entries.len(), 2);
+
+        // n_normal 的 stable_uuid 单独查（Note 模型没暴露此列，只在 DB 表中）
+        let normal_uuid: String = {
+            let conn = db.conn_lock().unwrap();
+            conn.query_row(
+                "SELECT stable_uuid FROM notes WHERE id = ?1",
+                rusqlite::params![n_normal.id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let e_normal = m
+            .entries
+            .iter()
+            .find(|e| e.stable_id == normal_uuid)
+            .unwrap_or_else(|| panic!("missing normal entry; got = {:?}", m.entries));
+        assert!(!e_normal.encrypted);
+
+        let e_enc = m
+            .entries
+            .iter()
+            .find(|e| e.title == "密文")
+            .expect("missing encrypted entry");
+        assert!(e_enc.encrypted, "is_encrypted=1 笔记 entry.encrypted 必须 true");
+        // content_hash 应基于 blob hex 而非占位字符串
+        let expected_blob_hex = "01020304";
+        let expected_hash = content_hash("密文", &sha256_hex(expected_blob_hex));
+        assert_eq!(
+            e_enc.content_hash, expected_hash,
+            "加密笔记 content_hash 必须用 blob hex 算"
+        );
+    }
+
     #[test]
     fn new_manifest_without_hash_algo_when_explicitly_none() {
         // hash_algo = None 时 skip_serializing_if 应让该字段不出现在 JSON 里
@@ -670,6 +846,7 @@ mod tests {
             generated_at: "x".into(),
             entries: vec![],
             hash_algo: None,
+            vault: None,
         };
         let json = serde_json::to_string(&m).unwrap();
         assert!(!json.contains("hashAlgo"), "None 时不应输出该字段; got = {}", json);

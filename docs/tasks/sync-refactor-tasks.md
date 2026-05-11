@@ -223,15 +223,36 @@
 
 ---
 
-#### T-S014 · 加密笔记同步策略（决策 + 实现）
+#### T-S014 · 加密笔记同步策略（端到端加密，方案 B）
 
-- **状态**：`pending`
+- **状态**：`completed` · 完成日期：2026-05-11
 - **价值**：⭐⭐⭐⭐  成本：中（1 天）
 - **依赖**：T-S011
-- **决策点**（开始前必须先与用户对齐）：
-  - 方案 A：**排除加密笔记**（不进 manifest，只在本设备）
-  - 方案 B：**端到端加密同步**（用户额外密码派生 key，远端拿到密文）
-- **子任务（待方案确认后展开）**
+- **采用方案**：**方案 B（共享 vault salt + 同步密文）**
+- **方案要点**：
+  - `SyncManifestV1.vault: Option<VaultMeta>`：salt+verifier base64 顶层字段
+  - 首次同步：本机无 vault → `import_meta_if_not_set` 从远端拉 salt+verifier
+  - vault salt 不匹配 → 警告 + 加密笔记跳过本次同步（不阻塞普通笔记）
+  - 加密笔记 manifest entry `encrypted: true` + `content_hash` 基于 `sha256(blob_hex)`
+  - 远端 `notes/<uuid>.md` 文件：base64(encrypted_blob) 而非占位字符串
+  - pull 时按 stable_uuid 走 `upsert_encrypted_note_with_uuid`，复用现有 vault key 解密
+- **子任务**：
+  - [x] `models/mod.rs`：`VaultMeta` 结构 + `ManifestEntry.encrypted` 字段 + `SyncManifestV1.vault` 顶层字段
+  - [x] `services/vault.rs`：`read_meta` / `import_meta` / `import_meta_if_not_set` / `meta_matches`
+  - [x] `database/notes.rs`：`get_note_crypto_state_by_uuid` / `upsert_encrypted_note_with_uuid`
+  - [x] `services/sync_v1/manifest.rs::compute_local_manifest`：读 is_encrypted + blob，base hash 用 blob hex
+  - [x] `services/sync_v1/push.rs`：encrypted entry → base64(blob) 上传
+  - [x] `services/sync_v1/pull.rs`：远端 vault meta 处理 + base64 解码 + upsert_encrypted_note
+  - [x] 单测 5/5 新增通过：vault_meta_serde / 加密笔记 manifest / DAO 往返 / 导入 + 拒绝坏 base64
+  - [x] 全 lib 168 个单测通过
+- **安全保证**：
+  - 远端只见到 salt（公开数据）+ verifier（密文）+ 密文 blob，**不见明文与 vault key**
+  - 派生 key 仍是 Argon2id(用户密码, salt) — 即使远端被盗，无密码不可解
+  - "忘密码 = 数据丢失" 取舍延续到云端
+- **限制**：
+  - 笔记 title 仍是明文（manifest entry.title 公开）；后续可加 title 加密
+  - 标签 / 文件夹路径 / 双链 等元数据未加密
+  - 本机已设置 vault + 远端不同 salt → 加密笔记两端无法互通（设计如此）
 
 ---
 
@@ -447,7 +468,9 @@ Phase X (按需)        ──────► 端到端加密 / 冲突合并 UI
 
 - **Phase 1**：✅ 完成（T-S001 / T-S002 / T-S003）—— 2026-05-11
   - 收益：manifest 计算不再读 content；push 不再全量装 HashMap；崩溃残留自动清理
-- **Phase 2**：⏸ 待启动（下一步：T-S010 stable_uuid 列）
-- **Phase 3-5 / X**：⏸ 排队中
+- **Phase 2**：✅ 完成（T-S010 / T-S011 / T-S012 / T-S013 / T-S014）—— 2026-05-11
+  - 收益：多端 stable_uuid 不撞车；tombstone 推送解决删除复活；manifest 合并不再吞远端；
+    端到端加密笔记跨端同步（方案 B：共享 salt + 密文 base64 上传）
+- **Phase 3-5 / X**：⏸ 排队中（CAS 附件、并发上传、V0 退化）
 
-下次开始任务时，从 **T-S010** 开始：先评估 + 给方案 + 等确认。
+下次开始任务时，从 **Phase 3 / T-S020 (CAS 目录结构设计)** 开始：先评估 + 给方案 + 等确认。

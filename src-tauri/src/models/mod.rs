@@ -1282,6 +1282,7 @@ pub struct ManifestEntry {
     /// - 缺失（旧客户端）= `SHA-256(title + "\n" + content)`
     /// - "v2"（当前）  = `SHA-256(title + "\n" + notes.content_hash)`，复用 v22 起的 notes.content_hash 列，
     ///   manifest 计算时无需再读 content，大库内存与 IO 显著下降
+    /// - 加密笔记（T-S014，encrypted=true）：content_hash 改用 encrypted_blob 的 sha256_hex 参与公式
     pub content_hash: String,
     /// ISO-8601 / 本地时间字符串（来自 notes.updated_at）
     pub updated_at: String,
@@ -1293,6 +1294,24 @@ pub struct ManifestEntry {
     /// 文件夹路径（如 "工作/周报"）；根层为空串。导入时用来重建文件夹树
     #[serde(default)]
     pub folder_path: String,
+    /// T-S014：是否为加密笔记。true 时远端 `.md` 文件内容是 base64(encrypted_blob) 而非明文；
+    /// 拉取后写入 notes.encrypted_blob + is_encrypted=1 + content="🔒 已加密" 占位
+    #[serde(default)]
+    pub encrypted: bool,
+}
+
+/// V1 同步顶层携带的 vault 元数据（T-S014 端到端加密同步）
+///
+/// 多端共享同一密码 + 同一 salt → 派生出同一把 vault key，从而能解密同步过来的密文。
+/// `salt` 公开存在远端是安全的（密码学上 salt 设计上就是公开的）；
+/// `verifier` 是用 vault key 加密的常量，用来在解锁时校验密码正确，不会泄露 key。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultMeta {
+    /// vault salt 的 base64（来自 app_config 的 `vault.salt`）
+    pub salt: String,
+    /// vault verifier 的 base64（来自 app_config 的 `vault.verifier`）
+    pub verifier: String,
 }
 
 /// V1 同步 manifest（远端 manifest.json 全文）
@@ -1314,6 +1333,10 @@ pub struct SyncManifestV1 {
     /// sync_remote_state 触发首次全量重推升级到 v2。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash_algo: Option<String>,
+    /// T-S014：vault 元数据（salt + verifier）。多端共享同一份 → 派生出同一 vault key 解密密文。
+    /// 字段缺失（旧客户端 / 远端未启用 vault）→ 加密笔记不参与同步
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<VaultMeta>,
 }
 
 impl SyncManifestV1 {
