@@ -51,6 +51,7 @@ import { insertVideoTimestamp } from "./VideoTimestamp";
 import { EmojiPicker } from "./EmojiPicker";
 import { AnnotationButton } from "./AnnotationButton";
 import { CompareClipboardButton } from "./CompareClipboardButton";
+import { CompareNotesButton } from "./CompareNotesButton";
 import { parseEmbedUrl, SUPPORTED_PROVIDERS } from "./embedVideoProviders";
 import { useFormatPainter } from "./useFormatPainter";
 
@@ -497,10 +498,16 @@ export function EditorToolbar({ editor, noteId, ensureNoteId }: ToolbarProps) {
         ),
       },
       {
-        // 与剪贴板对比：有选区→对比选中文本（可一键替换）；无选区→对比整篇笔记（只读）
+        // 与剪贴板对比 / 合并（左=剪贴板，右=当前笔记 markdown，可编辑）
         icon: null,
         title: "对比剪贴板",
         customRender: () => <CompareClipboardButton editor={editor} />,
+      },
+      {
+        // 与其他笔记对比 / 合并
+        icon: null,
+        title: "对比其他笔记",
+        customRender: () => <CompareNotesButton editor={editor} noteId={noteId} />,
       },
     ],
     // 颜色 / 字号 / 行高
