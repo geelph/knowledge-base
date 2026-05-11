@@ -12,9 +12,12 @@ import {
   Link as LinkIcon,
   Image as ImageIcon,
   Sparkles,
+  Eye,
+  Pencil,
 } from "lucide-react";
 import { message } from "antd";
-import { noteApi } from "@/lib/api";
+import ReactMarkdown from "react-markdown";
+import { noteApi, aiChatApi } from "@/lib/api";
 import { useAppStore } from "@/store";
 import type { Note } from "@/types";
 
@@ -62,6 +65,10 @@ export function MobileNoteEditor() {
   const [content, setContent] = useState("");
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [pinning, setPinning] = useState(false);
+  /** 编辑(源码) / 预览(Markdown 渲染) 切换 */
+  const [previewMode, setPreviewMode] = useState(false);
+  /** 点 AI 按钮 → 新建对话 + 附本笔记，过程中防重复点 */
+  const [askingAi, setAskingAi] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const dirtyRef = useRef(false);
@@ -197,6 +204,34 @@ export function MobileNoteEditor() {
     }
   }
 
+  /**
+   * "针对本笔记问 AI"：先把未落盘的改动 flush，再新建一个 AI 对话并把本笔记挂上去，
+   * 然后跳到聊天页。后端每次 sendMessage 会按 attached_note_ids 拉笔记拼进 system prompt，
+   * 用户进去就能直接"解读 / 续写 / 翻译这篇笔记"。
+   */
+  async function askAiAboutNote() {
+    if (!note || askingAi) return;
+    setAskingAi(true);
+    try {
+      // 1) 先落盘当前编辑，确保 AI 拿到最新内容
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      if (dirtyRef.current) await doSave();
+      // 2) 新建对话（标题用笔记名，方便日后辨认）+ 挂载本笔记
+      const convTitle = (titleRef.current || "未命名笔记").slice(0, 30);
+      const conv = await aiChatApi.createConversation(`关于：${convTitle}`);
+      await aiChatApi.setAttachedNotes(conv.id, [note.id]);
+      // 3) 通知列表刷新（这篇可能改过标题）再跳聊天页
+      useAppStore.getState().bumpNotesRefresh();
+      navigate(`/ai-chat/${conv.id}`);
+    } catch (e) {
+      message.error(`创建 AI 对话失败: ${e}`);
+      setAskingAi(false);
+    }
+  }
+
   function insertAtCursor(prefix: string, suffix = "") {
     const ta = textareaRef.current;
     if (!ta) return;
@@ -272,6 +307,17 @@ export function MobileNoteEditor() {
         </div>
         <div className="flex">
           <button
+            onClick={() => setPreviewMode((v) => !v)}
+            aria-label={previewMode ? "回到编辑" : "预览渲染"}
+            className="flex h-10 w-10 items-center justify-center"
+          >
+            {previewMode ? (
+              <Pencil size={19} className="text-[#1677FF]" />
+            ) : (
+              <Eye size={20} className="text-slate-500" />
+            )}
+          </button>
+          <button
             onClick={handlePin}
             aria-label={note?.is_pinned ? "取消置顶" : "置顶"}
             className="flex h-10 w-10 items-center justify-center"
@@ -324,57 +370,77 @@ export function MobileNoteEditor() {
           )}
         </div>
 
-        <textarea
-          ref={textareaRef}
-          value={content}
-          onChange={(e) => {
-            const v = e.target.value;
-            contentRef.current = v;
-            setContent(v);
-            scheduleSave();
-          }}
-          placeholder="在这里写下你的想法..."
-          className="w-full resize-none border-none bg-transparent text-[15px] leading-relaxed text-slate-700 outline-none"
-          style={{ minHeight: "calc(100vh - 280px)" }}
-        />
+        {previewMode ? (
+          // 渲染预览（只读）。复用全局 .ai-markdown 样式（标题/列表/代码块等，与 AI 回复一致）
+          content.trim() ? (
+            <div
+              className="ai-markdown text-[15px] leading-relaxed text-slate-800"
+              style={{ minHeight: "calc(100vh - 280px)" }}
+            >
+              <ReactMarkdown>{content}</ReactMarkdown>
+            </div>
+          ) : (
+            <div className="py-8 text-center text-sm text-slate-300">
+              （还没有内容，切回编辑模式开始写）
+            </div>
+          )
+        ) : (
+          <textarea
+            ref={textareaRef}
+            value={content}
+            onChange={(e) => {
+              const v = e.target.value;
+              contentRef.current = v;
+              setContent(v);
+              scheduleSave();
+            }}
+            placeholder="在这里写下你的想法..."
+            className="w-full resize-none border-none bg-transparent text-[15px] leading-relaxed text-slate-700 outline-none"
+            style={{ minHeight: "calc(100vh - 280px)" }}
+          />
+        )}
       </main>
 
-      {/* 底部 Markdown 工具栏 */}
-      <footer
-        className="border-t border-slate-200 bg-white"
-        style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
-      >
-        <div className="flex items-center gap-1 overflow-x-auto px-2 py-2 scrollbar-none">
-          <ToolButton onClick={() => insertAtCursor("**", "**")}>
-            <Bold size={20} className="text-slate-600" />
-          </ToolButton>
-          <ToolButton onClick={() => insertAtCursor("*", "*")}>
-            <Italic size={20} className="text-slate-600" />
-          </ToolButton>
-          <ToolButton onClick={() => insertLineStart("# ")}>
-            <Heading1 size={20} className="text-slate-600" />
-          </ToolButton>
-          <ToolButton onClick={() => insertLineStart("- ")}>
-            <List size={20} className="text-slate-600" />
-          </ToolButton>
-          <ToolButton onClick={() => insertLineStart("- [ ] ")}>
-            <CheckSquare size={20} className="text-slate-600" />
-          </ToolButton>
-          <ToolButton onClick={() => insertAtCursor("[[", "]]")}>
-            <LinkIcon size={20} className="text-slate-600" />
-          </ToolButton>
-          <ToolButton onClick={() => insertAtCursor("![](", ")")}>
-            <ImageIcon size={20} className="text-slate-600" />
-          </ToolButton>
-          <button
-            onClick={() => navigate("/ai")}
-            aria-label="AI 助手"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-50 active:bg-orange-100"
-          >
-            <Sparkles size={20} className="text-[#FA8C16]" />
-          </button>
-        </div>
-      </footer>
+      {/* 底部 Markdown 工具栏 —— 预览模式下隐藏（无可编辑内容，避免误触） */}
+      {!previewMode && (
+        <footer
+          className="border-t border-slate-200 bg-white"
+          style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+        >
+          <div className="flex items-center gap-1 overflow-x-auto px-2 py-2 scrollbar-none">
+            <ToolButton onClick={() => insertAtCursor("**", "**")}>
+              <Bold size={20} className="text-slate-600" />
+            </ToolButton>
+            <ToolButton onClick={() => insertAtCursor("*", "*")}>
+              <Italic size={20} className="text-slate-600" />
+            </ToolButton>
+            <ToolButton onClick={() => insertLineStart("# ")}>
+              <Heading1 size={20} className="text-slate-600" />
+            </ToolButton>
+            <ToolButton onClick={() => insertLineStart("- ")}>
+              <List size={20} className="text-slate-600" />
+            </ToolButton>
+            <ToolButton onClick={() => insertLineStart("- [ ] ")}>
+              <CheckSquare size={20} className="text-slate-600" />
+            </ToolButton>
+            <ToolButton onClick={() => insertAtCursor("[[", "]]")}>
+              <LinkIcon size={20} className="text-slate-600" />
+            </ToolButton>
+            <ToolButton onClick={() => insertAtCursor("![](", ")")}>
+              <ImageIcon size={20} className="text-slate-600" />
+            </ToolButton>
+            {/* AI：新建对话并把本笔记挂上去，进去就能"问关于这篇笔记的事" */}
+            <button
+              onClick={() => void askAiAboutNote()}
+              disabled={askingAi}
+              aria-label="针对本笔记问 AI"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-50 active:bg-orange-100 disabled:opacity-50"
+            >
+              <Sparkles size={20} className="text-[#FA8C16]" />
+            </button>
+          </div>
+        </footer>
+      )}
     </div>
   );
 }
