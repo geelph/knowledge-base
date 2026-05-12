@@ -601,10 +601,13 @@ git push github vx.y.z
 | M7 上传 R2 | `~/bin/rclone.exe copy "releases/mobile-vx.y.z/Knowledge.Base_x.y.z_android-arm64.apk" r2:downloads/knowledge-base/mobile-vx.y.z/`；`.aab` 同样 |
 | M8 生成 `update-mobile.json` + `update-mobile-r2.json` | 扁平结构（无 minisign signature，Android 自己验 APK 签名）：`{"version":"x.y.z","notes":"...","pub_date":"...","url":"<base>/Knowledge.Base_x.y.z_android-arm64.apk"}`。两份只有 `url` 的 base 不同：GitHub 版 base = `https://github.com/bkywksj/knowledge-base-release/raw/main/releases/mobile-vx.y.z`，R2 版 base = `https://pub-...r2.dev/knowledge-base/mobile-vx.y.z`。写到 release 仓根目录 |
 | M9 上传 R2 `update-mobile.json` | `~/bin/rclone.exe copy update-mobile-r2.json r2:downloads/knowledge-base/` → `~/bin/rclone.exe moveto r2:downloads/knowledge-base/update-mobile-r2.json r2:downloads/knowledge-base/update-mobile.json`；curl 验证 200 |
+| M9.5 更新 R2 `mobile-versions.json` | 文档站下载页的 📱 banner 读这个（构建时由 docs 的 `config.ts` 拉，类似桌面 `versions.json`）。curl 拉 `https://pub-...r2.dev/knowledge-base/mobile-versions.json`（不存在则初始化 `{"versions":[]}`）→ 去重后头部插入 `{version:"mobile-vx.y.z", notes:..., pub_date:now UTC, apk_url:".../mobile-vx.y.z/Knowledge.Base_x.y.z_android-arm64.apk", aab_url:".../...aab"}`（apk_url/aab_url 用 R2 base）→ `~/bin/rclone.exe copyto` 覆盖 `r2:downloads/knowledge-base/mobile-versions.json`；顺手 `~/bin/rclone.exe copyto` 把 APK 也覆盖到 `r2:downloads/knowledge-base/mobile-latest.apk`（稳定链接，mobile.md 指向它）|
 | M10 更新 README + 推 release 仓 | 在 README 的「移动端（Android）」区块加下载行 + 移动端版本历史条目；`git add -A && git commit -m "release(mobile): vx.y.z" && git pull --rebase origin main && git push origin main && git push gitee main:master`（Gitee 失败跳过，已知 fork 分叉） |
 | M11 publish GitHub Release | 把 `mobile-vx.y.z` 的 draft Release 改 `draft:false`（PATCH，name=`知识库 移动端 vx.y.z`，body=更新说明）。注意 CI 在哪个仓就 publish 哪个仓的 |
-| M12 触发文档站重建 | docs 仓 `docs/public/.last-mobile-release.json`（或在 mobile.md 里更新版本号）→ commit → `git push gitee master && git push github master`，EdgeOne 自动重建 |
-| M13 完成报告 | 移动版本 / 源码 commit / tag / CI / release 仓 commit / R2 / 自动更新（update-mobile.json）|
+| M12 触发文档站重建 | 改 docs 仓 `docs/public/.last-release-mobile.json`（`{version:"mobile-vx.y.z", published_at:now UTC}`）→ `git add docs/public/.last-release-mobile.json && git commit -m "chore: 同步移动端 vx.y.z" && git push gitee master && git push github master`（docs 仓 remote 只有 gitee+github），EdgeOne 自动重建 → `config.ts` 重新拉 R2 `mobile-versions.json` → 📱 banner 显示新版本 |
+| M13 完成报告 | 移动版本 / 源码 commit / tag / CI / release 仓 commit / R2（含 mobile-versions.json + mobile-latest.apk）/ 自动更新（update-mobile.json）/ 文档站 |
+
+> 移动端在 R2 上的 3 个关键文件：`update-mobile.json`（App 内检查更新读它，单条最新）/ `mobile-versions.json`（文档站下载页 📱 banner 读它，历史数组带 apk_url/aab_url）/ `mobile-latest.apk`（稳定下载链接，mobile.md 指向它）。三个每发一次移动端都要更新。
 
 ### 配合 App 内"检查更新"
 
