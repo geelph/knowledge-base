@@ -194,9 +194,10 @@ pub fn resolve_conflict(
     };
 
     if encrypted {
-        // 加密笔记不在此处合并：任何 resolution 都只是"忽略"——删掉冲突标记文件
-        std::fs::remove_file(&canon_path)
-            .map_err(|e| AppError::Custom(format!("删除冲突文件失败: {}", e)))?;
+        // 加密笔记不在此处合并：任何 resolution 都只是"忽略"——清掉这条笔记的冲突标记文件
+        if let Some(backend_dir) = canon_path.parent() {
+            remove_conflict_files_for(backend_dir, &stable_id);
+        }
         return Ok(());
     }
 
@@ -284,9 +285,60 @@ pub fn resolve_conflict(
         }
     }
 
-    std::fs::remove_file(&canon_path)
-        .map_err(|e| AppError::Custom(format!("删除冲突文件失败: {}", e)))?;
+    // 删掉这条笔记的所有冲突文件（当前格式只有 <uuid>.md 一个，但早期版本会堆多个 <uuid>_<ts>.md）
+    if let Some(backend_dir) = canon_path.parent() {
+        remove_conflict_files_for(backend_dir, &stable_id);
+    }
     Ok(())
+}
+
+// ─── 冲突文件读写工具 ──────────────────────────────────────────
+// 早期版本把分歧冲突写成 `<uuid>_<远端 updated_at>.md`，每次 pull 检测到分歧就生成一个新文件名
+// （ts 不同 → 不覆盖）→ 同一条笔记的冲突文件越积越多。现在改用固定名 `<uuid>.md`（覆盖写），
+// 并在写入 / 解决冲突时把该笔记历史堆积的旧文件一并清掉。
+
+/// 某 `.md` 文件（stem，不含扩展名）是否属于笔记 `safe_id`：
+/// 匹配 `<safe_id>`（当前固定名）或 `<safe_id>_<...>`（早期带远端时间戳的）。
+fn is_conflict_file_of(file_stem: &str, safe_id: &str) -> bool {
+    file_stem == safe_id
+        || file_stem
+            .strip_prefix(safe_id)
+            .map_or(false, |rest| rest.starts_with('_'))
+}
+
+/// 删掉某 backend 冲突目录下属于 `stable_id` 的所有冲突文件（含历史堆积的带时间戳的旧文件）。
+/// 删不掉的（权限等）忽略 —— 下次 list_conflicts 仍会列出，用户可再试。
+fn remove_conflict_files_for(backend_conflicts_dir: &Path, stable_id: &str) {
+    let safe_id = stable_id.replace('/', "_");
+    let rd = match std::fs::read_dir(backend_conflicts_dir) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    for ent in rd.flatten() {
+        let p = ent.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            if is_conflict_file_of(stem, &safe_id) {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+}
+
+/// 写一条笔记的冲突文件到 `<backend_conflicts_dir>/<stable_id>.md`（固定名，覆盖写）；
+/// 写前先清掉该笔记历史堆积的旧冲突文件。
+/// `backend_conflicts_dir` = `<app_data>/sync_conflicts/backend_<id>/`。
+pub fn write_conflict_file(
+    backend_conflicts_dir: &Path,
+    stable_id: &str,
+    body: &str,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(backend_conflicts_dir)?;
+    remove_conflict_files_for(backend_conflicts_dir, stable_id);
+    let safe_id = stable_id.replace('/', "_");
+    std::fs::write(backend_conflicts_dir.join(format!("{}.md", safe_id)), body)
 }
 
 /// 解析冲突 .md 文件：首个 `# ` 行作为 title，其余作为 content（与 pull::parse_note_md 同规则）
@@ -329,5 +381,88 @@ mod tests {
         let stem = fname.strip_suffix(".md").unwrap();
         let sid = stem.split_once('_').unwrap().0;
         assert_eq!(sid, "11111111-2222-3333-4444-555555555555");
+    }
+
+    // ───────── 修 Bug：冲突文件堆积（固定名 + 清理旧文件）─────────
+
+    #[test]
+    fn is_conflict_file_of_matches_fixed_and_legacy_names() {
+        assert!(is_conflict_file_of("uuid-abc", "uuid-abc")); // 当前固定名 <uuid>.md
+        assert!(is_conflict_file_of("uuid-abc_2026-05-12-10-30-00", "uuid-abc")); // 早期 <uuid>_<ts>.md
+        assert!(!is_conflict_file_of("uuid-abcde", "uuid-abc"), "前缀但非 '_' 边界，不算");
+        assert!(!is_conflict_file_of("other-uuid", "uuid-abc"));
+    }
+
+    #[test]
+    fn write_conflict_file_fixed_name_and_cleans_legacy_stack() {
+        let dir = std::env::temp_dir().join("kb_sync_v1_conflict_write_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let sid = "11111111-1111-1111-1111-111111111111";
+
+        // 模拟早期堆积的带时间戳冲突文件 + 另一条笔记的冲突文件（不该被动到）
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{}_2026-05-10-08-00-00.md", sid)), "old1").unwrap();
+        std::fs::write(dir.join(format!("{}_2026-05-11-09-00-00.md", sid)), "old2").unwrap();
+        std::fs::write(dir.join("22222222-2222-2222-2222-222222222222.md"), "other").unwrap();
+
+        write_conflict_file(&dir, sid, "newest").unwrap();
+
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        assert!(names.contains(&format!("{}.md", sid)), "应有固定名 <uuid>.md; got = {:?}", names);
+        assert!(
+            !names.iter().any(|n| n.starts_with(&format!("{}_", sid))),
+            "早期带时间戳的旧文件应被清掉; got = {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"22222222-2222-2222-2222-222222222222.md".to_string()),
+            "别的笔记的冲突文件不受影响"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(format!("{}.md", sid))).unwrap(),
+            "newest"
+        );
+
+        // 再写一次 → 覆盖，不堆积
+        write_conflict_file(&dir, sid, "newest2").unwrap();
+        let mine = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(sid))
+            .count();
+        assert_eq!(mine, 1, "同一笔记最多一个冲突文件");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(format!("{}.md", sid))).unwrap(),
+            "newest2"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_conflict_files_for_clears_all_variants_of_one_note() {
+        let dir = std::env::temp_dir().join("kb_sync_v1_conflict_rm_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        std::fs::write(dir.join(format!("{}.md", sid)), "x").unwrap();
+        std::fs::write(dir.join(format!("{}_2026-01-01-00-00-00.md", sid)), "y").unwrap();
+        std::fs::write(dir.join(format!("{}_2026-02-02-00-00-00.md", sid)), "z").unwrap();
+        std::fs::write(dir.join("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.md"), "keep").unwrap();
+
+        remove_conflict_files_for(&dir, sid);
+
+        let remaining: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        assert_eq!(remaining, vec!["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.md".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

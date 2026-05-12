@@ -310,27 +310,21 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
                     &entry.content_hash,
                 );
                 if diverged {
-                    if let Err(e) = std::fs::create_dir_all(conflicts_dir) {
-                        result
-                            .errors
-                            .push(format!("创建冲突目录失败 {}: {}", conflicts_dir.display(), e));
-                    }
-                    let safe_id = entry.stable_id.replace('/', "_");
-                    let path = conflicts_dir.join(format!(
-                        "{}_{}.md",
-                        safe_id,
-                        entry.updated_at.replace([':', ' '], "-")
-                    ));
-                    match std::fs::write(&path, &body) {
+                    match super::conflicts::write_conflict_file(
+                        conflicts_dir,
+                        &entry.stable_id,
+                        &body,
+                    ) {
                         Ok(_) => {
                             result.conflicts += 1;
                             log::warn!(
-                                "[sync_v1] 笔记 {} 本地/远端各改各的，已把远端版本落冲突文件 {}，本地保留",
-                                entry.title,
-                                path.display()
+                                "[sync_v1] 笔记 {} 本地/远端各改各的，已把远端版本落冲突文件，本地保留（等用户在设置页解决）",
+                                entry.title
                             );
                         }
-                        Err(e) => result.errors.push(format!("写冲突文件失败: {}", e)),
+                        Err(e) => result
+                            .errors
+                            .push(format!("写冲突文件失败 ({}): {}", entry.title, e)),
                     }
                     continue; // 不 update_note、不 upsert_remote_state → 保留本地，等用户在设置页解决
                 }
@@ -421,21 +415,16 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
     }
 
     // ── 处理 conflicts（updated_at 相同但 hash 不同）
-    if !diff.conflicts.is_empty() {
-        std::fs::create_dir_all(conflicts_dir).ok();
-    }
     for pair in &diff.conflicts {
         result.conflicts += 1;
-        // 把远端版本落地到 .conflicts/，让用户手动选
+        // 把远端版本落地到 sync_conflicts/，让用户在设置页手动选
         match backend.get_note(&pair.remote.remote_path) {
             Ok(Some(remote_body)) => {
-                let safe_id = pair.remote.stable_id.replace('/', "_");
-                let path = conflicts_dir.join(format!(
-                    "{}_{}.md",
-                    safe_id,
-                    pair.remote.updated_at.replace([':', ' '], "-")
-                ));
-                if let Err(e) = std::fs::write(&path, remote_body) {
+                if let Err(e) = super::conflicts::write_conflict_file(
+                    conflicts_dir,
+                    &pair.remote.stable_id,
+                    &remote_body,
+                ) {
                     result.errors.push(format!("写冲突文件失败: {}", e));
                 }
             }
