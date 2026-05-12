@@ -343,19 +343,10 @@ pub fn write_conflict_file(
     std::fs::write(backend_conflicts_dir.join(format!("{}.md", safe_id)), body)
 }
 
-/// 解析冲突 .md 文件：首个 `# ` 行作为 title，其余作为 content（与 pull::parse_note_md 同规则）
+/// 解析冲突 `.md` 文件 → `(title, content)`。转发到 [`super::note_md::parse_note_md`]
+/// （新格式 YAML front-matter + 兼容旧 `# 标题` 格式）。
 fn parse_remote_md(body: &str, fallback_title: &str) -> (String, String) {
-    let mut lines = body.lines();
-    let first = lines.next().unwrap_or("").trim();
-    if let Some(rest) = first.strip_prefix("# ") {
-        let title = rest.trim().to_string();
-        let body_rest: String = lines
-            .skip_while(|l| l.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
-        return (title, body_rest);
-    }
-    (fallback_title.to_string(), body.to_string())
+    super::note_md::parse_note_md(body, fallback_title)
 }
 
 #[cfg(test)]

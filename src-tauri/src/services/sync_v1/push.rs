@@ -256,7 +256,7 @@ pub fn push<R: Runtime, E: Emitter<R>>(
                 }
             }
         } else {
-            format_note_md(&title, &content)
+            super::note_md::format_note_md(&title, &content)
         };
 
         pending.push(PendingUpload {
@@ -495,16 +495,6 @@ fn short_hash(hash: &str) -> String {
     } else {
         hash.to_string()
     }
-}
-
-/// 把笔记渲染成 markdown 文本（只是给 .md 文件用）
-fn format_note_md(title: &str, content: &str) -> String {
-    // 如果 content 已有 # 标题，避免重复
-    let trimmed = content.trim_start();
-    if trimmed.starts_with("# ") {
-        return content.to_string();
-    }
-    format!("# {}\n\n{}", title, content)
 }
 
 /// 让未引用的常量不报警告（暂留给 pull 用）

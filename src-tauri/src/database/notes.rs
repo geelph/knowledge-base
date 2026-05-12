@@ -338,6 +338,46 @@ impl Database {
         self.get_note_inner(&conn, id)
     }
 
+    /// 同步 V1 pull 专用：更新笔记，但 `updated_at` 用**传入的值**（远端 manifest entry 的 updated_at），
+    /// 而非冒泡到 `datetime('now')`。
+    ///
+    /// 为什么：pull 是"被动接收远端版本"，不该把本地 `updated_at` 改成现在 —— 否则下一轮本地这条笔记的
+    /// `updated_at` 莫名其妙比远端新（last-write-wins 会误判它要 push），也让"本地最近改动"时间失真。
+    /// 设成远端 entry 的 `updated_at` → 本地与远端一致；内容也一致时 `content_hash` 相同 → diff 跳过。
+    pub fn update_note_synced(
+        &self,
+        id: i64,
+        input: &NoteInput,
+        updated_at: &str,
+    ) -> Result<Note, AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let normalized = crate::database::links::normalize_title(&input.title);
+        let content_hash = crate::services::hash::sha256_hex(&input.content);
+        let affected = conn.execute(
+            "UPDATE notes SET title = ?1, content = ?2, folder_id = ?3,
+                    title_normalized = ?4,
+                    content_hash = ?5,
+                    updated_at = ?6
+             WHERE id = ?7",
+            params![
+                input.title,
+                input.content,
+                input.folder_id,
+                normalized,
+                content_hash,
+                updated_at,
+                id
+            ],
+        )?;
+        if affected == 0 {
+            return Err(AppError::NotFound(format!("笔记 {} 不存在", id)));
+        }
+        self.get_note_inner(&conn, id)
+    }
+
     /// 批量移动笔记到指定文件夹（`folder_id = None` 表示移到根目录）
     ///
     /// 只改 `folder_id`，**不碰 `updated_at`**：批量整理属于"归档动作"，
@@ -1811,5 +1851,53 @@ mod stable_uuid_tests {
 
         db.sync_note_hidden_state(n.id, true).unwrap();
         assert!(note_is_hidden(&db, n.id), "已隐藏时再'远端隐藏'幂等");
+    }
+
+    // ───────── 修 Bug：pull 不把 updated_at 冒泡到 now ─────────
+
+    /// update_note_synced：updated_at 用传入值，而非 datetime('now')
+    #[test]
+    fn update_note_synced_uses_given_timestamp() {
+        let db = fresh_db();
+        let n = db
+            .create_note(&NoteInput {
+                title: "原标题".into(),
+                content: "原内容".into(),
+                folder_id: None,
+            })
+            .unwrap();
+
+        let fixed_ts = "2026-01-15 10:30:00";
+        let updated = db
+            .update_note_synced(
+                n.id,
+                &NoteInput {
+                    title: "新标题".into(),
+                    content: "新内容".into(),
+                    folder_id: None,
+                },
+                fixed_ts,
+            )
+            .unwrap();
+        assert_eq!(updated.title, "新标题");
+        assert_eq!(updated.content, "新内容");
+        assert_eq!(
+            updated.updated_at, fixed_ts,
+            "updated_at 必须用传入值，不能冒泡到 now"
+        );
+
+        // 笔记不存在 → NotFound
+        let err = db
+            .update_note_synced(
+                999_999,
+                &NoteInput {
+                    title: "x".into(),
+                    content: "y".into(),
+                    folder_id: None,
+                },
+                fixed_ts,
+            )
+            .unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
     }
 }

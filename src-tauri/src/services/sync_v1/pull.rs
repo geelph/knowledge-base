@@ -292,8 +292,8 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
             continue;
         }
 
-        // 非加密笔记：原 markdown 路径
-        let (title, content) = parse_note_md(&body, &entry.title);
+        // 非加密笔记：原 markdown 路径（解析 front-matter / 兼容旧 # 标题格式）
+        let (title, content) = super::note_md::parse_note_md(&body, &entry.title);
         let input = NoteInput {
             title,
             content,
@@ -328,7 +328,8 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
                     }
                     continue; // 不 update_note、不 upsert_remote_state → 保留本地，等用户在设置页解决
                 }
-                match db.update_note(local_id, &input) {
+                // pull 是被动接收 → updated_at 用远端 entry 的值，不冒泡到 now（修同步震荡 / 时间失真）
+                match db.update_note_synced(local_id, &input, &entry.updated_at) {
                     Ok(_) => {
                         // 把"每日笔记"标记对齐到远端 manifest entry（远端是日记本地不是 → 恢复；反之则清）
                         if let Err(e) = db.sync_note_daily_state(
@@ -473,24 +474,6 @@ fn is_divergence(local_hash: Option<&str>, last_synced_hash: Option<&str>, remot
     }
 }
 
-/// 解析 .md 文件：第一个 `# ` 行作为 title，其余作为 content
-///
-/// 如解析不到 # 标题，回退到 manifest entry 里的 title + 全文作为 content
-fn parse_note_md(body: &str, fallback_title: &str) -> (String, String) {
-    let mut lines = body.lines();
-    let first = lines.next().unwrap_or("").trim();
-    if let Some(rest) = first.strip_prefix("# ") {
-        let title = rest.trim().to_string();
-        // 跳过紧跟的空行（两个换行的写法）
-        let body_rest: String = lines
-            .skip_while(|l| l.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
-        return (title, body_rest);
-    }
-    (fallback_title.to_string(), body.to_string())
-}
-
 /// 把 "工作/周报" 风格的路径递归展平成 folder_id
 ///
 /// 复用 `FolderService::ensure_path`（T-006 阶段已实现）
@@ -504,22 +487,6 @@ fn ensure_folder_path(db: &Database, path: &str) -> Result<Option<i64>, AppError
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_md_with_h1() {
-        let body = "# 我的标题\n\n正文内容\n第二段";
-        let (t, c) = parse_note_md(body, "fallback");
-        assert_eq!(t, "我的标题");
-        assert_eq!(c, "正文内容\n第二段");
-    }
-
-    #[test]
-    fn parse_md_no_h1_uses_fallback() {
-        let body = "没有 H1 的正文";
-        let (t, c) = parse_note_md(body, "manifest 标题");
-        assert_eq!(t, "manifest 标题");
-        assert_eq!(c, "没有 H1 的正文");
-    }
 
     #[test]
     fn divergence_only_when_both_changed_and_differ() {

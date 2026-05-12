@@ -22,6 +22,7 @@ pub mod lock;
 pub mod backend_s3;
 pub mod backend_webdav;
 pub mod manifest;
+pub mod note_md;
 pub mod pull;
 pub mod push;
 pub mod runtime;
