@@ -47,6 +47,26 @@ pub fn push<R: Runtime, E: Emitter<R>>(
             phase: "compute".into(),
             current: 0,
             total: 0,
+            message: "刷新附件索引…".into(),
+        },
+    );
+    // 同步前先刷新附件索引：note_attachments 表只在这里（和手动「重建附件索引」）维护，
+    // 不刷新的话新加的图片/视频不会进 manifest.attachments → 不会上传到远端。失败仅 warn 不阻塞。
+    match super::attachment_scan::scan_all_active_notes(db, data_dir) {
+        Ok(n) => log::info!("[sync_v1] push 前刷新附件索引：{} 条引用", n),
+        Err(e) => log::warn!(
+            "[sync_v1] push 前刷新附件索引失败（继续，本次可能漏传新附件）: {}",
+            e
+        ),
+    }
+
+    let _ = emitter.emit(
+        event_name,
+        ProgressEvent {
+            backend_id,
+            phase: "compute".into(),
+            current: 0,
+            total: 0,
             message: "计算本地 manifest…".into(),
         },
     );

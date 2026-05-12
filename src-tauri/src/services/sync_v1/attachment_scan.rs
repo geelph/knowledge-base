@@ -50,6 +50,20 @@ fn re_wiki_embed() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"!\[\[([^\]\|]+?)(\|[^\]]*)?\]\]").unwrap())
 }
 
+/// `kb-asset://<相对路径>` 引用正则。
+///
+/// 前端 `TiptapEditor` 把所有本地资产（图片/视频/PDF…）的 `src` 统一改写成这个形式，通过
+/// `tiptap-markdown` 的 `html: true` 原样存进 `.md` —— 实际上多数图片/视频在 `.md` 里就是
+/// `<img src="kb-asset://kb_assets/images/1/x.png">` / `<video src="kb-asset://kb_assets/videos/...">`，
+/// 而不是 markdown 的 `![](...)`。这条正则补上对它的识别（否则附件同步永远扫不到图片/视频）。
+///
+/// 捕获组 1 = 剥掉 `kb-asset://` 之后的部分（即相对 `data_dir` 的路径，如 `kb_assets/images/1/x.png`）。
+/// 终止于空白 / 引号 / 反引号 / `)` / `]` / `>` / `#` / `?`（URL fragment/query 不属于路径）。
+fn re_kb_asset() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r#"kb-asset://([^\s"'`)\]>#?]+)"#).unwrap())
+}
+
 /// 已知本地资产路径前缀（含 dev 前缀变体）
 const KNOWN_PREFIXES: &[&str] = &[
     "kb_assets/",
@@ -100,7 +114,19 @@ pub fn extract_local_refs(content: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    // markdown 图片优先（[2] 是 path）
+    // `kb-asset://<rel>` 引用 —— 放最前面，因为这是实际最常见的形式：前端给所有图片/视频/资产的 src
+    // 都改写成 `kb-asset://...`，多见于 `<img src="kb-asset://...">` / `<video src="kb-asset://...">`
+    // HTML 标签（被 tiptap-markdown 原样存进 .md）。捕获组 1 已是剥掉 `kb-asset://` 后的相对路径。
+    for cap in re_kb_asset().captures_iter(content) {
+        if let Some(p) = cap.get(1) {
+            let decoded = url_decode(p.as_str());
+            if looks_like_local_asset(&decoded) && seen.insert(decoded.clone()) {
+                out.push(decoded);
+            }
+        }
+    }
+
+    // markdown 图片（[2] 是 path）—— 兼容旧 / 导入笔记里的纯 markdown 写法 `![](kb_assets/...)`
     for cap in re_md_image().captures_iter(content) {
         if let Some(p) = cap.get(2) {
             let decoded = url_decode(p.as_str());
@@ -325,6 +351,60 @@ mod tests {
         let s = "![](kb_assets/images/has%20space.png)";
         let refs = extract_local_refs(s);
         assert_eq!(refs, vec!["kb_assets/images/has space.png".to_string()]);
+    }
+
+    // ───────── 修 Bug：识别 kb-asset:// 形式的图片/视频引用（这才是实际形式） ─────────
+
+    #[test]
+    fn extract_kb_asset_in_html_img_and_video() {
+        let s = r#"
+            <p>文字</p>
+            <img src="kb-asset://kb_assets/images/1/photo.png" alt="x" />
+            <video src="kb-asset://kb_assets/videos/3/clip.mp4" controls></video>
+            <iframe src="https://player.bilibili.com/x"></iframe>
+        "#;
+        let refs = extract_local_refs(s);
+        assert!(refs.contains(&"kb_assets/images/1/photo.png".to_string()), "got {:?}", refs);
+        assert!(refs.contains(&"kb_assets/videos/3/clip.mp4".to_string()), "got {:?}", refs);
+        assert_eq!(refs.len(), 2, "外链 iframe 不该被抓; got {:?}", refs);
+    }
+
+    #[test]
+    fn extract_kb_asset_in_markdown_image() {
+        let s = "![cover](kb-asset://kb_assets/images/x.png) 文字 ![](kb-asset://dev-pdfs/y.pdf)";
+        let refs = extract_local_refs(s);
+        assert!(refs.contains(&"kb_assets/images/x.png".to_string()), "got {:?}", refs);
+        assert!(refs.contains(&"dev-pdfs/y.pdf".to_string()), "got {:?}", refs);
+        assert_eq!(refs.len(), 2);
+    }
+
+    #[test]
+    fn extract_kb_asset_dedup_with_markdown_form() {
+        // 同一路径既有 kb-asset:// 形式又有纯 markdown 形式（极端）→ 只入一次
+        let s = "<img src=\"kb-asset://kb_assets/images/dup.png\"> ![](kb_assets/images/dup.png)";
+        let refs = extract_local_refs(s);
+        assert_eq!(refs, vec!["kb_assets/images/dup.png".to_string()]);
+    }
+
+    #[test]
+    fn extract_kb_asset_enc_image() {
+        let s = "<img src=\"kb-asset://kb_assets/images/1/secret.png.enc\">";
+        let refs = extract_local_refs(s);
+        assert_eq!(refs, vec!["kb_assets/images/1/secret.png.enc".to_string()]);
+    }
+
+    #[test]
+    fn extract_kb_asset_url_encoded() {
+        let s = "<img src=\"kb-asset://kb_assets/images/has%20space.png\">";
+        let refs = extract_local_refs(s);
+        assert_eq!(refs, vec!["kb_assets/images/has space.png".to_string()]);
+    }
+
+    #[test]
+    fn kb_asset_with_unknown_prefix_rejected() {
+        let s = "<img src=\"kb-asset://random_dir/x.png\">";
+        let refs = extract_local_refs(s);
+        assert!(refs.is_empty(), "未知前缀仍按白名单拒绝; got {:?}", refs);
     }
 
     #[test]
