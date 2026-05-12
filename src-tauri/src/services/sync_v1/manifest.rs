@@ -72,7 +72,7 @@ pub fn compute_local_manifest(
     // 不会被同步出去（自动隔离损坏数据）。
     let mut stmt = conn.prepare(
         "SELECT stable_uuid, title, content_hash, updated_at, folder_id, is_deleted, deleted_at,
-                is_encrypted, encrypted_blob, is_daily, daily_date
+                is_encrypted, encrypted_blob, is_daily, daily_date, is_hidden
          FROM notes
          WHERE stable_uuid IS NOT NULL
            AND (is_deleted = 0 OR (is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at >= ?1))",
@@ -90,6 +90,7 @@ pub fn compute_local_manifest(
         Option<Vec<u8>>,
         i64,            // is_daily
         Option<String>, // daily_date
+        i64,            // is_hidden
     )> = stmt
         .query_map(rusqlite::params![tombstone_cutoff], |row| {
             Ok((
@@ -106,6 +107,7 @@ pub fn compute_local_manifest(
                 row.get::<_, Option<Vec<u8>>>(8)?,
                 row.get::<_, i64>(9)?,
                 row.get::<_, Option<String>>(10)?,
+                row.get::<_, i64>(11)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -143,6 +145,7 @@ pub fn compute_local_manifest(
         encrypted_blob,
         is_daily_int,
         daily_date,
+        is_hidden_int,
     ) in rows
     {
         let path = folder_path_for(&folders_by_id, folder_id);
@@ -181,6 +184,7 @@ pub fn compute_local_manifest(
             is_daily,
             // 防御：非日记不带 daily_date（避免脏数据传播到其他端）
             daily_date: if is_daily { daily_date } else { None },
+            is_hidden: is_hidden_int != 0,
         });
     }
 
@@ -408,12 +412,12 @@ pub fn diff_manifests(local: &SyncManifestV1, remote: &SyncManifestV1) -> Manife
             }
 
             if le.content_hash == re.content_hash {
-                // 内容一致，但修复历史"伪日记"：远端 manifest 标记这条是每日笔记、本地这条却不是
-                // （早期同步协议没传 is_daily，对端 pull 后变成 is_daily=0 的普通笔记）。
-                // 拉一次（update_note 内容不变）让 pull.rs 顺带 sync_note_daily_state 把标记补回来。
-                // 仅做"恢复 is_daily"这个单向修复；反方向（本地是日记、远端不是）不动，靠 merge_manifests
-                // 用本地全量写远端 manifest 自然把 is_daily 带上去，下一轮其他端就能看到。
-                if re.is_daily && !le.is_daily {
+                // 内容一致，但元数据需要单向对齐（拉一次，update_note 内容不变，pull.rs 顺带补标记）：
+                // - 远端标记是日记、本地不是 → 恢复 is_daily（修历史"伪日记"）
+                // - 远端标记隐藏、本地不隐藏 → 恢复 is_hidden（避免隐藏笔记在新端变可见）
+                // 只做"远端有 → 本地补"这个单向修复；反方向（本地有、远端没有）不动，靠 merge_manifests
+                // 用本地全量写远端 manifest 自然把标记带上去，下一轮其他端就能看到。
+                if (re.is_daily && !le.is_daily) || (re.is_hidden && !le.is_hidden) {
                     diff.to_pull.push((*re).clone());
                 }
                 continue;
@@ -449,6 +453,7 @@ mod tests {
             encrypted: false,
             is_daily: false,
             daily_date: None,
+            is_hidden: false,
         }
     }
 
@@ -457,6 +462,13 @@ mod tests {
         let mut e = entry(id, title, hash, ts, false);
         e.is_daily = true;
         e.daily_date = Some(date.into());
+        e
+    }
+
+    /// 同 `entry` 但 is_hidden=true（is_hidden 修复相关测试用）
+    fn hidden_entry(id: &str, title: &str, hash: &str, ts: &str) -> ManifestEntry {
+        let mut e = entry(id, title, hash, ts, false);
+        e.is_hidden = true;
         e
     }
 
@@ -1161,5 +1173,100 @@ mod tests {
         let json2 = serde_json::to_string(&manifest(vec![entry("1", "x", "h", "t", false)])).unwrap();
         assert!(json2.contains("\"isDaily\":false"), "got = {}", json2);
         assert!(!json2.contains("dailyDate"), "非日记不应输出 dailyDate; got = {}", json2);
+    }
+
+    // ───────── 修 Bug：隐藏笔记 is_hidden 进同步协议 ─────────
+
+    /// compute_local_manifest 把笔记的 is_hidden 填进 entry
+    #[test]
+    fn compute_local_manifest_carries_is_hidden() {
+        use crate::models::NoteInput;
+        let db = Database::init(":memory:").unwrap();
+
+        let visible = db
+            .create_note(&NoteInput {
+                title: "可见".into(),
+                content: "x".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let hidden = db
+            .create_note(&NoteInput {
+                title: "隐藏".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        {
+            let conn = db.conn_lock().unwrap();
+            conn.execute(
+                "UPDATE notes SET is_hidden = 1 WHERE id = ?1",
+                rusqlite::params![hidden.id],
+            )
+            .unwrap();
+        }
+
+        let (uv, uh): (String, String) = {
+            let conn = db.conn_lock().unwrap();
+            (
+                conn.query_row(
+                    "SELECT stable_uuid FROM notes WHERE id = ?1",
+                    rusqlite::params![visible.id],
+                    |r| r.get(0),
+                )
+                .unwrap(),
+                conn.query_row(
+                    "SELECT stable_uuid FROM notes WHERE id = ?1",
+                    rusqlite::params![hidden.id],
+                    |r| r.get(0),
+                )
+                .unwrap(),
+            )
+        };
+
+        let m = compute_local_manifest(&db, "test", "host").unwrap();
+        assert!(
+            !m.entries.iter().find(|e| e.stable_id == uv).unwrap().is_hidden,
+            "可见笔记 entry.is_hidden 必须 false"
+        );
+        assert!(
+            m.entries.iter().find(|e| e.stable_id == uh).unwrap().is_hidden,
+            "隐藏笔记 entry.is_hidden 必须 true"
+        );
+    }
+
+    /// diff：内容相同但远端标记隐藏、本地不隐藏 → 放进 to_pull 以恢复 is_hidden
+    #[test]
+    fn diff_recovers_is_hidden_when_remote_hidden() {
+        let local = manifest(vec![entry("1", "a", "h1", "2026-05-12", false)]);
+        let remote = manifest(vec![hidden_entry("1", "a", "h1", "2026-05-12")]);
+        let d = diff_manifests(&local, &remote);
+        assert_eq!(d.to_pull.len(), 1, "应拉一次以恢复 is_hidden");
+        assert!(d.to_pull[0].is_hidden);
+        assert_eq!(d.to_push.len(), 0);
+        assert_eq!(d.conflicts.len(), 0);
+    }
+
+    /// diff：本地隐藏、远端不隐藏（旧端写的 manifest）→ 不通过 diff 取消本地隐藏
+    #[test]
+    fn diff_no_unhide_when_local_hidden_remote_not() {
+        let local = manifest(vec![hidden_entry("1", "a", "h1", "2026-05-12")]);
+        let remote = manifest(vec![entry("1", "a", "h1", "2026-05-12", false)]);
+        let d = diff_manifests(&local, &remote);
+        assert_eq!(d.to_pull.len(), 0, "不能把本地刚隐藏的笔记又改回可见");
+        assert_eq!(d.to_push.len(), 0);
+    }
+
+    /// 旧 manifest（无 isHidden 字段）反序列化为 is_hidden=false；新 entry 序列化出 isHidden
+    #[test]
+    fn is_hidden_serde_compatibility() {
+        let old = r#"{"manifestVersion":1,"appVersion":"x","device":"x","generatedAt":"x","entries":[{"stableId":"u","title":"t","contentHash":"h","updatedAt":"u","remotePath":"notes/u.md"}]}"#;
+        let m: SyncManifestV1 = serde_json::from_str(old).unwrap();
+        assert!(!m.entries[0].is_hidden, "旧 manifest entry 应反序列化为 is_hidden=false");
+
+        let json = serde_json::to_string(&manifest(vec![hidden_entry("1", "x", "h", "t")])).unwrap();
+        assert!(json.contains("\"isHidden\":true"), "got = {}", json);
+        let json2 = serde_json::to_string(&manifest(vec![entry("1", "x", "h", "t", false)])).unwrap();
+        assert!(json2.contains("\"isHidden\":false"), "got = {}", json2);
     }
 }

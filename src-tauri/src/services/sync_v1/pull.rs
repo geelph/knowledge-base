@@ -330,8 +330,7 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
                 }
                 match db.update_note(local_id, &input) {
                     Ok(_) => {
-                        // 修复日记重复 bug：把"每日笔记"标记对齐到远端 manifest entry
-                        // （远端是日记本地却不是 → 恢复 is_daily/daily_date；反之则清掉标记）
+                        // 把"每日笔记"标记对齐到远端 manifest entry（远端是日记本地不是 → 恢复；反之则清）
                         if let Err(e) = db.sync_note_daily_state(
                             local_id,
                             entry.is_daily,
@@ -340,6 +339,12 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
                             result
                                 .errors
                                 .push(format!("对齐日记标记失败 {}: {}", entry.title, e));
+                        }
+                        // 把"隐藏"标记对齐（仅单向：远端隐藏 → 本地也隐藏，避免隐藏笔记在新端变可见）
+                        if let Err(e) = db.sync_note_hidden_state(local_id, entry.is_hidden) {
+                            result
+                                .errors
+                                .push(format!("对齐隐藏标记失败 {}: {}", entry.title, e));
                         }
                         Some(local_id)
                     }
@@ -352,13 +357,14 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
                 }
             }
             None => {
-                // 本地没有 → 用远端 UUID 创建（保持多端 ID 稳定）+ 透传 is_daily/daily_date
-                // （否则拉来的日记会变成普通笔记，对端 get_or_create_daily 认不出来 → 反复新建）
+                // 本地没有 → 用远端 UUID 创建（保持多端 ID 稳定）+ 透传 is_daily/daily_date/is_hidden
+                // （否则拉来的日记变普通笔记 → get_or_create_daily 反复新建；隐藏笔记拉到对端变可见）
                 match db.create_note_with_uuid(
                     &input,
                     &entry.stable_id,
                     entry.is_daily,
                     entry.daily_date.as_deref(),
+                    entry.is_hidden,
                 ) {
                     Ok(n) => Some(n.id),
                     Err(e) => {

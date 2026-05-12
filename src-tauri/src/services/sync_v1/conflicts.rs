@@ -245,6 +245,7 @@ pub fn resolve_conflict(
                         &stable_id,
                         false,
                         None,
+                        false,
                     )?;
                 }
             }
@@ -279,6 +280,7 @@ pub fn resolve_conflict(
                         &stable_id,
                         false,
                         None,
+                        false,
                     )?;
                 }
             }

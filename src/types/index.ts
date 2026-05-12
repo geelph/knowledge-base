@@ -983,6 +983,8 @@ export interface ManifestEntry {
   isDaily?: boolean;
   /** 每日笔记的日期 YYYY-MM-DD（isDaily=true 时有值） */
   dailyDate?: string | null;
+  /** 是否隐藏笔记（旧 manifest 无此字段；修复隐藏笔记跨端变可见时加入） */
+  isHidden?: boolean;
 }
 
 export interface SyncManifestV1 {

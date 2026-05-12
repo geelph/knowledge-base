@@ -1308,6 +1308,11 @@ pub struct ManifestEntry {
     /// 旧 manifest 无此字段 → None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_date: Option<String>,
+    /// 是否隐藏笔记（notes.is_hidden）。修复跨端同步丢失 is_hidden → 隐藏笔记拉到对端变可见
+    /// （隐私问题）。旧 manifest 无此字段 → false。隐藏笔记内容本来就明文同步（"隐藏"≠加密），
+    /// 这里只让"隐藏状态"也跨端一致；pull 仅做单向恢复（远端隐藏 → 本地也隐藏），不反向取消隐藏。
+    #[serde(default)]
+    pub is_hidden: bool,
 }
 
 /// V1 同步 manifest 顶层的附件清单条目（T-S022 sidecar CAS 附件同步）

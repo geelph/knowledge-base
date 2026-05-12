@@ -45,16 +45,17 @@ impl Database {
     /// 与 `create_note` 区别：
     /// - UUID 由调用方传入而非内部生成。冲突时返回 SQLite UNIQUE 错误，
     ///   上层 pull 流程应先用 `get_note_id_by_stable_uuid` 查重决定 update / create。
-    /// - `is_daily` / `daily_date`：从远端 manifest entry 透传过来，恢复"每日笔记"标记。
-    ///   这是修复 **日记跨端同步丢失 is_daily → 对端 `get_or_create_daily` 认不出来 → 每天反复
-    ///   新建一条** 的关键。`is_daily=false` 时 `daily_date` 强制存 NULL；
-    ///   旧 manifest 不带这些信息时调用方传 `false, None`，靠 `get_or_create_daily` 的兜底认领自愈。
+    /// - `is_daily` / `daily_date`：从远端 manifest entry 透传，恢复"每日笔记"标记
+    ///   （修日记跨端反复重建）。`is_daily=false` 时 `daily_date` 强制存 NULL；
+    ///   旧 manifest 不带时调用方传 `false, None`，靠 `get_or_create_daily` 兜底认领自愈。
+    /// - `is_hidden`：从远端 manifest entry 透传，恢复"隐藏笔记"标记（避免隐藏笔记拉到对端变可见）。
     pub fn create_note_with_uuid(
         &self,
         input: &NoteInput,
         stable_uuid: &str,
         is_daily: bool,
         daily_date: Option<&str>,
+        is_hidden: bool,
     ) -> Result<Note, AppError> {
         let conn = self
             .conn
@@ -66,8 +67,8 @@ impl Database {
         let daily_date_val: Option<&str> = if is_daily { daily_date } else { None };
         conn.execute(
             "INSERT INTO notes
-                (title, content, folder_id, title_normalized, content_hash, stable_uuid, is_daily, daily_date)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (title, content, folder_id, title_normalized, content_hash, stable_uuid, is_daily, daily_date, is_hidden)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 input.title,
                 input.content,
@@ -77,6 +78,7 @@ impl Database {
                 stable_uuid,
                 is_daily as i32,
                 daily_date_val,
+                is_hidden as i32,
             ],
         )?;
         let id = conn.last_insert_rowid();
@@ -151,6 +153,28 @@ impl Database {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    /// 同步 V1 pull 用：把本地某条笔记的"隐藏"标记对齐到远端 manifest entry。
+    ///
+    /// 只做单向恢复：**远端隐藏（`is_hidden=true`）而本地这条还可见 → 设 `is_hidden=1`**
+    /// （避免隐藏笔记拉到新端变可见这个隐私问题）。反方向（远端可见、本地隐藏）不动 ——
+    /// 不主动取消本地隐藏，免得误把用户刚在本端隐藏的笔记又改回可见。
+    /// 不动 `updated_at`（元数据对齐，不算内容变更）。
+    pub fn sync_note_hidden_state(&self, id: i64, is_hidden: bool) -> Result<(), AppError> {
+        if !is_hidden {
+            return Ok(()); // 单向：只做"远端隐藏 → 本地也隐藏"
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        // affected=0 也无所谓（本地已隐藏，或笔记不存在）
+        conn.execute(
+            "UPDATE notes SET is_hidden = 1 WHERE id = ?1 AND is_hidden = 0",
+            params![id],
+        )?;
         Ok(())
     }
 
@@ -1594,6 +1618,7 @@ mod stable_uuid_tests {
                 "11111111-1111-1111-1111-111111111111",
                 true,
                 Some("2026-05-12"),
+                false,
             )
             .unwrap();
         assert_eq!(note_daily_state(&db, daily.id), (true, Some("2026-05-12".into())));
@@ -1609,6 +1634,7 @@ mod stable_uuid_tests {
                 "22222222-2222-2222-2222-222222222222",
                 false,
                 Some("2026-05-12"),
+                false,
             )
             .unwrap();
         assert_eq!(note_daily_state(&db, plain.id), (false, None));
@@ -1631,6 +1657,7 @@ mod stable_uuid_tests {
                 "33333333-3333-3333-3333-333333333333",
                 false,
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(note_daily_state(&db, pseudo.id), (false, None));
@@ -1713,5 +1740,76 @@ mod stable_uuid_tests {
         db.sync_note_daily_state(other.id, true, Some("2026-05-12")).unwrap();
         assert_eq!(note_daily_state(&db, other.id), (false, None), "冲突时应保持 other 为普通笔记");
         assert_eq!(note_daily_state(&db, real.id), (true, Some("2026-05-12".into())), "原日记不受影响");
+    }
+
+    // ───────── 修 Bug：隐藏笔记 is_hidden 跨端同步 ─────────
+
+    fn note_is_hidden(db: &Database, id: i64) -> bool {
+        let conn = db.conn_lock().unwrap();
+        conn.query_row(
+            "SELECT is_hidden FROM notes WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|v| v != 0)
+        .unwrap()
+    }
+
+    /// create_note_with_uuid 透传 is_hidden
+    #[test]
+    fn create_note_with_uuid_carries_is_hidden() {
+        let db = fresh_db();
+        let hidden = db
+            .create_note_with_uuid(
+                &NoteInput {
+                    title: "密".into(),
+                    content: "x".into(),
+                    folder_id: None,
+                },
+                "11111111-1111-1111-1111-111111111111",
+                false,
+                None,
+                true,
+            )
+            .unwrap();
+        assert!(note_is_hidden(&db, hidden.id), "is_hidden=true 应落到 notes.is_hidden");
+
+        let visible = db
+            .create_note_with_uuid(
+                &NoteInput {
+                    title: "普".into(),
+                    content: "y".into(),
+                    folder_id: None,
+                },
+                "22222222-2222-2222-2222-222222222222",
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+        assert!(!note_is_hidden(&db, visible.id));
+    }
+
+    /// sync_note_hidden_state：远端隐藏 → 本地也隐藏；远端可见 → 本地不动（不反向取消隐藏）
+    #[test]
+    fn sync_note_hidden_state_one_way() {
+        let db = fresh_db();
+        let n = db
+            .create_note(&NoteInput {
+                title: "a".into(),
+                content: "x".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        assert!(!note_is_hidden(&db, n.id));
+
+        db.sync_note_hidden_state(n.id, true).unwrap();
+        assert!(note_is_hidden(&db, n.id), "远端隐藏 → 本地隐藏");
+
+        db.sync_note_hidden_state(n.id, false).unwrap();
+        assert!(note_is_hidden(&db, n.id), "远端可见时不主动取消本地隐藏");
+
+        db.sync_note_hidden_state(n.id, true).unwrap();
+        assert!(note_is_hidden(&db, n.id), "已隐藏时再'远端隐藏'幂等");
     }
 }
