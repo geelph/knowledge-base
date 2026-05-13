@@ -1067,6 +1067,7 @@ pub fn run() {
             commands::template::update_template,
             commands::template::delete_template,
             commands::template::create_note_from_template,
+            commands::template::render_template_content,
             // PDF 模块
             commands::pdf::import_pdfs,
             commands::pdf::get_pdf_absolute_path,

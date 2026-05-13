@@ -1,19 +1,24 @@
-use chrono::{Datelike, Local};
+use chrono::{Datelike, Local, NaiveDate};
 
 use crate::database::Database;
 use crate::error::AppError;
 use crate::models::{NoteTemplate, NoteTemplateInput};
 
-/// 模板内容里的占位符渲染：把 `{{date}}` / `{{weekday}}` 等替换成当前本地时间。
+/// 模板内容里的占位符渲染：把 `{{date}}` / `{{weekday}}` 等替换成本地时间。
 ///
 /// 支持：date / time / datetime / year / month / day / weekday / title。
 /// 不支持带格式参数的 `{{date:YYYY/MM/DD}}` 语法（v1，按需后续扩展）。
 ///
+/// `for_date` 用于"翻历史日记套模板"等需要锁定特定日期的场景：传 Some(YYYY-MM-DD)
+/// 时，date/year/month/day/weekday/datetime 都按该日期渲染；time 依然取当下时刻
+/// （否则历史日记里时分都是 00:00 反而怪）。传 None 时全部走当下。
+///
 /// **注意**：替换顺序很重要，长 key 必须在短 key 之前替换 —— 但本变量集里
 /// `{{datetime}}` 不包含 `{{date}}` 子串（前者整体是 12 字符 token），所以现行顺序安全。
-pub fn render_variables(content: &str, title: &str) -> String {
+pub fn render_variables(content: &str, title: &str, for_date: Option<NaiveDate>) -> String {
     let now = Local::now();
-    let weekday = match now.weekday() {
+    let date = for_date.unwrap_or_else(|| now.date_naive());
+    let weekday = match date.weekday() {
         chrono::Weekday::Mon => "星期一",
         chrono::Weekday::Tue => "星期二",
         chrono::Weekday::Wed => "星期三",
@@ -22,13 +27,15 @@ pub fn render_variables(content: &str, title: &str) -> String {
         chrono::Weekday::Sat => "星期六",
         chrono::Weekday::Sun => "星期日",
     };
+    let date_str = date.format("%Y-%m-%d").to_string();
+    let time_str = now.format("%H:%M").to_string();
     content
-        .replace("{{datetime}}", &now.format("%Y-%m-%d %H:%M").to_string())
-        .replace("{{date}}", &now.format("%Y-%m-%d").to_string())
-        .replace("{{time}}", &now.format("%H:%M").to_string())
-        .replace("{{year}}", &now.format("%Y").to_string())
-        .replace("{{month}}", &now.format("%m").to_string())
-        .replace("{{day}}", &now.format("%d").to_string())
+        .replace("{{datetime}}", &format!("{} {}", date_str, time_str))
+        .replace("{{date}}", &date_str)
+        .replace("{{time}}", &time_str)
+        .replace("{{year}}", &date.format("%Y").to_string())
+        .replace("{{month}}", &date.format("%m").to_string())
+        .replace("{{day}}", &date.format("%d").to_string())
         .replace("{{weekday}}", weekday)
         .replace("{{title}}", title)
 }
