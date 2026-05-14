@@ -1,6 +1,6 @@
 use crate::database::Database;
 use crate::error::AppError;
-use crate::models::Note;
+use crate::models::{DailyEntry, Note};
 
 /// 每日笔记服务
 pub struct DailyService;
@@ -37,6 +37,51 @@ impl DailyService {
             return Err(AppError::InvalidInput("年份无效".into()));
         }
         db.list_daily_dates(year, month)
+    }
+
+    /// 列出全部日记（前端按年月折叠分组渲染用）
+    pub fn list_all(db: &Database) -> Result<Vec<DailyEntry>, AppError> {
+        db.list_all_dailies()
+    }
+
+    /// 快速记一笔：把一段文字以「带时间戳的 callout 块」形式追加到今天的日记末尾。
+    ///
+    /// 实现：
+    ///   1. get_or_create_daily(today) 拿到当天日记 Note
+    ///   2. 把 text 包装成 `> [!info] 🕐 HH:MM\n> {text 多行}\n` 形式
+    ///      （Markdown callout 语法，被 tiptap-markdown 解析成 callout 节点）
+    ///   3. 追加到 content 末尾后调 update_note_content
+    ///
+    /// 返回当天日记的 id —— 前端可选择性跳转过去查看效果。
+    pub fn append_quick_capture(db: &Database, text: &str) -> Result<i64, AppError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(AppError::InvalidInput("内容不能为空".into()));
+        }
+
+        let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let note = db.get_or_create_daily(&today)?;
+
+        let now = chrono::Local::now().format("%H:%M").to_string();
+        // callout 块：每行前面加 `> `，被 tiptap-markdown 渲染成 info callout
+        let body_lines = text
+            .lines()
+            .map(|l| format!("> {}", l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let block = format!("\n\n> [!info] 🕐 {}\n{}\n", now, body_lines);
+
+        // 已有内容末尾如果没换行，先垫两个换行避免和新块粘连
+        let new_content = if note.content.is_empty() {
+            format!("> [!info] 🕐 {}\n{}\n", now, body_lines)
+        } else if note.content.ends_with('\n') {
+            format!("{}\n> [!info] 🕐 {}\n{}\n", note.content, now, body_lines)
+        } else {
+            format!("{}{}", note.content, block)
+        };
+
+        db.update_note_content(note.id, &new_content)?;
+        Ok(note.id)
     }
 }
 

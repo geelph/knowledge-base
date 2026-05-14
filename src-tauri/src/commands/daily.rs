@@ -1,4 +1,4 @@
-use crate::models::Note;
+use crate::models::{DailyEntry, Note};
 use crate::services::daily::DailyService;
 use crate::state::AppState;
 
@@ -35,4 +35,21 @@ pub fn get_daily_neighbors(
     date: String,
 ) -> Result<(Option<String>, Option<String>), String> {
     DailyService::get_neighbors(&state.db, &date).map_err(|e| e.to_string())
+}
+
+/// 列出全部日记（前端按年月分组渲染用）。
+/// 一次拉回所有日记的轻量元数据，前端 group 后用 Collapse 折叠展示。
+#[tauri::command]
+pub fn list_all_dailies(state: tauri::State<'_, AppState>) -> Result<Vec<DailyEntry>, String> {
+    DailyService::list_all(&state.db).map_err(|e| e.to_string())
+}
+
+/// 快速记一笔：追加带时间戳的 callout 块到今天的日记末尾。
+/// 返回当天日记的 id（前端可决定是否跳转）。
+#[tauri::command]
+pub fn append_quick_capture(
+    state: tauri::State<'_, AppState>,
+    text: String,
+) -> Result<i64, String> {
+    DailyService::append_quick_capture(&state.db, &text).map_err(|e| e.to_string())
 }

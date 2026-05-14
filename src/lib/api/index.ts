@@ -43,6 +43,7 @@ import type {
   NoteTemplate,
   NoteTemplateInput,
   DailyWritingStat,
+  DailyEntry,
   PdfImportResult,
   DocConverter,
   ConverterDiagnostic,
@@ -346,6 +347,11 @@ export const dailyApi = {
   /** 找当前日期相邻的真实存在的日记，返回 [prev, next]；按真实日记跳，跳过空白日 */
   getNeighbors: (date: string) =>
     invoke<[string | null, string | null]>("get_daily_neighbors", { date }),
+  /** 列出全部日记（轻量元数据），前端按年月分组 */
+  listAll: () => invoke<DailyEntry[]>("list_all_dailies"),
+  /** 快速记一笔：追加带时间戳的 callout 块到今天的日记末尾，返回当天日记 id */
+  appendQuickCapture: (text: string) =>
+    invoke<number>("append_quick_capture", { text }),
 };
 
 /** 笔记链接 API */

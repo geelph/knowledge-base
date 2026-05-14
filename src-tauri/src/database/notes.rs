@@ -1,7 +1,7 @@
 use rusqlite::{params, params_from_iter, OptionalExtension};
 
 use crate::error::AppError;
-use crate::models::{Note, NoteInput};
+use crate::models::{DailyEntry, Note, NoteInput};
 
 use super::Database;
 
@@ -516,8 +516,9 @@ impl Database {
                 }
             }
         } else if uncategorized {
-            // 未分类虚拟文件夹：folder_id 为 NULL 的笔记
-            conditions.push("folder_id IS NULL".to_string());
+            // 未分类虚拟文件夹：folder_id 为 NULL 且**不是日记**的笔记
+            // 日记单独走「📅 日记」入口（list_daily_grouped），不再污染未分类列表
+            conditions.push("folder_id IS NULL AND is_daily = 0".to_string());
         }
 
         if let Some(kw) = keyword {
@@ -1299,6 +1300,41 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(dates)
+    }
+
+    /// 列出全部日记，平铺返回 (id, title, daily_date)，按 daily_date 倒序。
+    ///
+    /// 前端拿到后按 year/month 分组渲染（GROUP BY 在 SQL 里做也行，但 SQLite 没有
+    /// 嵌套 array_agg，与其多次查询/反复 join，不如一次拉回再前端 group——日记总量
+    /// 通常 ~1k 级别，前端 group 开销可忽略）。
+    ///
+    /// 过滤：`is_daily=1 AND is_deleted=0 AND is_hidden=0`（隐藏日记走隐藏视图）。
+    pub fn list_all_dailies(&self) -> Result<Vec<DailyEntry>, AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, title, daily_date, updated_at
+             FROM notes
+             WHERE is_daily = 1 AND is_deleted = 0 AND is_hidden = 0
+                   AND daily_date IS NOT NULL
+             ORDER BY daily_date DESC",
+        )?;
+
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(DailyEntry {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    daily_date: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(entries)
     }
 
     /// 内部方法：通过已有连接获取单个笔记（避免重复锁）

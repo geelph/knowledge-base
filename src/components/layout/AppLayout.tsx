@@ -2,7 +2,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Layout, Button, theme as antdTheme, Tooltip, Dropdown, message } from "antd";
 import { SettingOutlined, PushpinOutlined, PushpinFilled } from "@ant-design/icons";
-import { Search, Palette, ArrowLeft, ArrowRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Search, Palette, ArrowLeft, ArrowRight, PanelLeftClose, PanelLeftOpen, FilePlus2 } from "lucide-react";
 import { getCurrentWindow, type Window } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -22,6 +22,7 @@ import { WindowControls } from "./WindowControls";
 import { InstanceBadge } from "./InstanceBadge";
 import { CommandPalette } from "@/components/ui/CommandPalette";
 import { QuickCaptureAsrModal } from "@/components/QuickCaptureAsrModal";
+import { QuickNoteCaptureModal } from "@/components/QuickNoteCaptureModal";
 import { AsrToggleController } from "@/components/AsrToggleController";
 import { ShortcutsPanel } from "@/components/ui/ShortcutsPanel";
 import { StarryBackground } from "@/components/ui/StarryBackground";
@@ -82,6 +83,15 @@ function DragRegion() {
 const ACTIVITY_BAR_WIDTH = 64;
 
 /**
+ * SidePanel 自动收起的窗口宽度阈值（带迟滞，避免在边界拖动时来回闪）：
+ * - 当前展开 → 窗口宽度 < HIDE_BELOW 时收起
+ * - 当前收起 → 窗口宽度 ≥ SHOW_ABOVE 时再放出来
+ * 两者之间 ~60px 死区。下限由 tauri.conf.json 的 minWidth 兜底（窗口本身不允许更窄）。
+ */
+const SIDE_PANEL_AUTO_HIDE_BELOW = 1180;
+const SIDE_PANEL_AUTO_SHOW_ABOVE = 1240;
+
+/**
  * 跟踪 React Router history 栈位置，给 Header 后退/前进按钮提供 disabled 信号。
  * React Router v7 在 window.history.state 上挂了 `idx` 字段，配合 length 即可判断
  * 是否能前进/后退，不需要自己维护栈。location 变更（含 POP）都会触发刷新。
@@ -139,11 +149,28 @@ export function AppLayout() {
     location.pathname === "/about" ||
     location.pathname.startsWith("/about/");
 
-  // SidePanel 是否最终可见：视图自身有 panel + 用户未手动折叠 + 不在 standalone 路由
+  // 窄屏自动收起 SidePanel：只影响渲染计算，不写 store —— 窗口拉宽后用户原本的
+  // sidePanelVisible 偏好自动恢复。带迟滞：收起后要拉宽过 SHOW_ABOVE 才放出来。
+  const [isNarrowWindow, setIsNarrowWindow] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < SIDE_PANEL_AUTO_HIDE_BELOW,
+  );
+  useEffect(() => {
+    const onResize = () => {
+      const w = window.innerWidth;
+      setIsNarrowWindow((prev) =>
+        prev ? w < SIDE_PANEL_AUTO_SHOW_ABOVE : w < SIDE_PANEL_AUTO_HIDE_BELOW,
+      );
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // SidePanel 是否最终可见：视图自身有 panel + 用户未手动折叠 + 不在 standalone 路由 + 非窄屏
   const panelShown =
-    !isStandalonePage && sidePanelVisible && viewHasPanel(activeView);
-  // 折叠按钮是否值得显示：当前视图本身要有 panel，否则按钮没有作用对象
-  const canTogglePanel = !isStandalonePage && viewHasPanel(activeView);
+    !isStandalonePage && sidePanelVisible && viewHasPanel(activeView) && !isNarrowWindow;
+  // 折叠按钮是否值得显示：当前视图本身要有 panel + 非窄屏（窄屏下面板被强制收起，按钮无意义）
+  const canTogglePanel =
+    !isStandalonePage && viewHasPanel(activeView) && !isNarrowWindow;
   const { canGoBack, canGoForward } = useHistoryNav();
   // Sider 永远只占 ActivityBar 宽度（48px），SidePanel 走绝对定位浮层覆盖在主区上方，
   // 这样 panel 出现/消失不会让主内容横向 reflow，彻底消掉"home → notes"卡顿
@@ -360,6 +387,7 @@ export function AppLayout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [asrCaptureOpen, setAsrCaptureOpen] = useState(false);
+  const [quickNoteOpen, setQuickNoteOpen] = useState(false);
   const { update, modalOpen, openModal, closeModal, checkManually } = useUpdateChecker();
 
   // 启动时静默 pull：让用户从其他设备做的修改自动拉到本地，避免后续编辑产生冲突。
@@ -443,6 +471,13 @@ export function AppLayout() {
     if (e.altKey && e.key === "ArrowRight") {
       e.preventDefault();
       navigate(1);
+    }
+    // Ctrl/Cmd + Shift + N：快速记一笔（追加到今天的日记，每条带时间戳 callout 块）
+    // 写在 Ctrl+N 前面，避免 Shift+N 也被当成新建笔记
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "n") {
+      e.preventDefault();
+      setQuickNoteOpen(true);
+      return;
     }
     // Ctrl/Cmd + N 新建笔记
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") {
@@ -637,6 +672,13 @@ export function AppLayout() {
           <DragRegion />
           <div style={{ display: "flex", alignItems: "center" }}>
             <UpdateBadge update={update} onClick={openModal} />
+            <Tooltip title="快速记一笔 (Ctrl+Shift+N) — 追加到今天的日记">
+              <Button
+                type="text"
+                icon={<FilePlus2 size={16} />}
+                onClick={() => setQuickNoteOpen(true)}
+              />
+            </Tooltip>
             <Tooltip title="搜索 (Ctrl+K)">
               <Button
                 type="text"
@@ -694,6 +736,10 @@ export function AppLayout() {
       <QuickCaptureAsrModal
         open={asrCaptureOpen}
         onClose={() => setAsrCaptureOpen(false)}
+      />
+      <QuickNoteCaptureModal
+        open={quickNoteOpen}
+        onClose={() => setQuickNoteOpen(false)}
       />
       <UpdateModal open={modalOpen} onClose={closeModal} update={update} />
       <ExitConfirmListener />
