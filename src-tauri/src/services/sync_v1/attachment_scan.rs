@@ -259,39 +259,91 @@ pub fn scan_note(
 
 /// 全库扫描：遍历所有活跃笔记（is_deleted=0），对每条调 scan_note。
 ///
-/// 设计为"手动触发"场景（设置页"重建附件索引"），不在每次 push 前自动跑（性能考虑）。
-/// 自动维护放在笔记 create/update DAO 钩子里（留给 T-S024 决策）。
+/// **增量**：只处理 `attachment_scan_at IS NULL OR attachment_scan_at < updated_at` 的笔记
+/// （v38 起新增的标记列）—— 上次扫过且笔记没动 = 跳过。Push 前自动跑也只重扫真正变更的笔记。
+/// 首次升级：`attachment_scan_at` 是 NULL → 第一次 push 仍全库扫一遍，之后稳态只扫变更。
+///
+/// `force_full=true` 时退化为全库扫，给设置页"重建附件索引"按钮用（用户能强制重建）。
 pub fn scan_all_active_notes(db: &Database, data_dir: &Path) -> Result<usize, AppError> {
+    scan_active_notes_inner(db, data_dir, false)
+}
+
+/// 强制全库重扫（清空 `attachment_scan_at` 后重扫）。给"重建附件索引"按钮用。
+pub fn scan_all_active_notes_force(db: &Database, data_dir: &Path) -> Result<usize, AppError> {
+    scan_active_notes_inner(db, data_dir, true)
+}
+
+fn scan_active_notes_inner(
+    db: &Database,
+    data_dir: &Path,
+    force_full: bool,
+) -> Result<usize, AppError> {
+    // 选 id：增量模式只挑 scan 标记落后于 updated_at 的；force_full 拿全量
     let note_ids: Vec<i64> = {
         let conn = db.conn_lock()?;
-        let mut stmt = conn.prepare("SELECT id FROM notes WHERE is_deleted = 0")?;
-        let rows = stmt
+        let sql = if force_full {
+            "SELECT id FROM notes WHERE is_deleted = 0"
+        } else {
+            "SELECT id FROM notes
+             WHERE is_deleted = 0
+               AND (attachment_scan_at IS NULL OR attachment_scan_at < updated_at)"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        // 不能直接把 collect 当 block 返回值（stmt/conn 会比 collect 结果先 drop）
+        let rows: Vec<i64> = stmt
             .query_map([], |r| r.get::<_, i64>(0))?
             .filter_map(|r| r.ok())
-            .collect::<Vec<_>>();
+            .collect();
         rows
     };
 
+    if note_ids.is_empty() {
+        return Ok(0);
+    }
+    log::debug!(
+        "[attachment-scan] {} 条笔记待扫描（force_full={}）",
+        note_ids.len(),
+        force_full
+    );
+
     let mut total = 0usize;
     for id in note_ids {
-        // 单独 lock 读 content，再调 scan_note（scan_note 会再 lock 写 upsert）
-        let content_opt: Option<String> = {
+        // 单独 lock 读 content + updated_at；scan_note 内部会再 lock 写 upsert
+        let row: Option<(String, String)> = {
             let conn = db.conn_lock()?;
             conn.query_row(
-                "SELECT content FROM notes WHERE id = ?1 AND is_deleted = 0",
+                "SELECT content, updated_at FROM notes WHERE id = ?1 AND is_deleted = 0",
                 [id],
-                |r| r.get::<_, String>(0),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
             .ok()
         };
-        if let Some(content) = content_opt {
+        if let Some((content, updated_at)) = row {
             match scan_note(db, data_dir, id, &content) {
-                Ok(n) => total += n,
+                Ok(n) => {
+                    total += n;
+                    // 标记本笔记已扫描到 updated_at 这个时刻；下次 update_note 把
+                    // updated_at 推到更新值时，scan_at < updated_at 自动重新进入扫描集
+                    if let Err(e) = mark_scanned(db, id, &updated_at) {
+                        log::warn!("[attachment-scan] 标记 note#{} 扫描时间失败: {}", id, e);
+                    }
+                }
                 Err(e) => log::warn!("[attachment-scan] 笔记 {} 扫描失败: {}", id, e),
             }
         }
     }
     Ok(total)
+}
+
+/// 把笔记的 `attachment_scan_at` 标记到 `scanned_to`（一般是该笔记当前的 `updated_at`）。
+/// 不动 `updated_at`，单纯写元数据。
+fn mark_scanned(db: &Database, note_id: i64, scanned_to: &str) -> Result<(), AppError> {
+    let conn = db.conn_lock()?;
+    conn.execute(
+        "UPDATE notes SET attachment_scan_at = ?1 WHERE id = ?2",
+        rusqlite::params![scanned_to, note_id],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -498,5 +550,143 @@ mod tests {
         assert!(db.list_attachments_for_note(nid).unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ───────── Bug 13：增量 scan ─────────
+
+    fn note_scan_at(db: &crate::database::Database, id: i64) -> Option<String> {
+        let conn = db.conn_lock().unwrap();
+        conn.query_row(
+            "SELECT attachment_scan_at FROM notes WHERE id = ?1",
+            [id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .unwrap()
+    }
+
+    fn note_updated_at(db: &crate::database::Database, id: i64) -> String {
+        let conn = db.conn_lock().unwrap();
+        conn.query_row(
+            "SELECT updated_at FROM notes WHERE id = ?1",
+            [id],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn incremental_scan_marks_attachment_scan_at() {
+        let tmp = std::env::temp_dir().join("kb_incr_scan_test_a");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let db = crate::database::Database::init(":memory:").unwrap();
+        let n = db
+            .create_note(&crate::models::NoteInput {
+                title: "x".into(),
+                content: "纯文本无附件".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        assert_eq!(note_scan_at(&db, n.id), None, "刚创建应是 NULL");
+
+        let scanned = scan_all_active_notes(&db, &tmp).unwrap();
+        assert_eq!(scanned, 0, "无附件 → upsert 数 0");
+        let updated = note_updated_at(&db, n.id);
+        assert_eq!(
+            note_scan_at(&db, n.id).as_deref(),
+            Some(updated.as_str()),
+            "scan 完应把 scan_at 标到当前 updated_at"
+        );
+
+        // 第二次同样调用 → 没有变更 → scan_at 不变（笔记本身没动）
+        scan_all_active_notes(&db, &tmp).unwrap();
+        assert_eq!(note_scan_at(&db, n.id).as_deref(), Some(updated.as_str()));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn note_updated_again_re_enters_scan_set() {
+        let tmp = std::env::temp_dir().join("kb_incr_scan_test_b");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let db = crate::database::Database::init(":memory:").unwrap();
+        let n = db
+            .create_note(&crate::models::NoteInput {
+                title: "x".into(),
+                content: "v1".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        scan_all_active_notes(&db, &tmp).unwrap();
+        let scan1 = note_scan_at(&db, n.id);
+        assert!(scan1.is_some());
+
+        // 改 updated_at 到一个明显更晚的时间（避免同一秒内 < 不成立）
+        {
+            let conn = db.conn_lock().unwrap();
+            conn.execute(
+                "UPDATE notes SET content = 'v2', updated_at = '2099-12-31 23:59:59' WHERE id = ?1",
+                [n.id],
+            )
+            .unwrap();
+        }
+
+        scan_all_active_notes(&db, &tmp).unwrap();
+        assert_eq!(
+            note_scan_at(&db, n.id).as_deref(),
+            Some("2099-12-31 23:59:59"),
+            "应被重扫并把 scan_at 推到新 updated_at"
+        );
+        assert_ne!(scan1.as_deref(), Some("2099-12-31 23:59:59"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn force_full_rescans_even_when_unchanged() {
+        let tmp = std::env::temp_dir().join("kb_incr_scan_test_c");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let db = crate::database::Database::init(":memory:").unwrap();
+        let n = db
+            .create_note(&crate::models::NoteInput {
+                title: "x".into(),
+                content: "v1".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        scan_all_active_notes(&db, &tmp).unwrap();
+        let scan1 = note_scan_at(&db, n.id);
+
+        // 强制重扫——笔记没动，scan_at 仍被重写但值不变（侧证全量路径走过了 mark_scanned）
+        scan_all_active_notes_force(&db, &tmp).unwrap();
+        let scan2 = note_scan_at(&db, n.id);
+        assert_eq!(scan1, scan2);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn migration_v37_to_v38_adds_attachment_scan_at_column() {
+        let db = crate::database::Database::init(":memory:").unwrap();
+        let cols: Vec<String> = {
+            let conn = db.conn_lock().unwrap();
+            let mut stmt = conn.prepare("PRAGMA table_info(notes)").unwrap();
+            let rows: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            rows
+        };
+        assert!(
+            cols.contains(&"attachment_scan_at".to_string()),
+            "v38 后 notes 表应有 attachment_scan_at 列; got = {:?}",
+            cols
+        );
     }
 }

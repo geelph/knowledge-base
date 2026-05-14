@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::error::AppError;
 
 /// 当前 Schema 版本
-pub const SCHEMA_VERSION: i32 = 37;
+pub const SCHEMA_VERSION: i32 = 38;
 
 /// 获取数据库版本
 pub fn get_version(conn: &Connection) -> Result<i32, AppError> {
@@ -67,6 +67,7 @@ pub fn migrate(conn: &Connection) -> Result<(), AppError> {
             34 => migrate_v34_to_v35(conn)?,
             35 => migrate_v35_to_v36(conn)?,
             36 => migrate_v36_to_v37(conn)?,
+            37 => migrate_v37_to_v38(conn)?,
             _ => {
                 return Err(AppError::Custom(format!("未知的数据库版本: {}", version)));
             }
@@ -1532,5 +1533,29 @@ fn migrate_v36_to_v37(conn: &Connection) -> Result<(), AppError> {
     )?;
 
     set_version(conn, 37)?;
+    Ok(())
+}
+
+/// v37 -> v38: notes.attachment_scan_at — 增量附件扫描标记
+///
+/// 修「同步前 push 自动跑 scan_all_active_notes 全库扫」的性能问题：
+/// 之前每次 push 都对所有未删笔记跑 regex + 文件 IO + 算 hash，1 万笔记可能要十几秒。
+/// 加这一列存"上次该笔记被附件扫描时的 updated_at"；下次 scan 只处理
+/// `attachment_scan_at IS NULL OR attachment_scan_at < updated_at` 的笔记 → 增量。
+///
+/// 列允许 NULL（存量行回填 NULL → 首次 scan 仍会全库扫一遍，之后稳态只扫变更的）。
+fn migrate_v37_to_v38(conn: &Connection) -> Result<(), AppError> {
+    log::info!("数据库迁移: v37 -> v38 (notes.attachment_scan_at 增量扫描标记)");
+
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(notes)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "attachment_scan_at") {
+        conn.execute_batch("ALTER TABLE notes ADD COLUMN attachment_scan_at TEXT;")?;
+    }
+
+    set_version(conn, 38)?;
     Ok(())
 }

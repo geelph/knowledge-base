@@ -214,8 +214,13 @@ pub fn sync_v1_get_local_manifest(
 /// 性能：O(笔记数 × 资产读取 IO)。1 万条笔记约几秒（取决于附件数和磁盘速度）。
 #[tauri::command]
 pub fn sync_v1_rebuild_attachment_index(state: State<'_, AppState>) -> Result<usize, String> {
-    crate::services::sync_v1::attachment_scan::scan_all_active_notes(&state.db, &state.data_dir)
-        .map_err(|e: AppError| e.to_string())
+    // 用户主动点"重建附件索引" → 走 force_full（忽略 attachment_scan_at），把所有笔记都重扫一遍。
+    // push 前自动跑的是增量版本（scan_all_active_notes），靠 attachment_scan_at < updated_at 跳过未变更笔记。
+    crate::services::sync_v1::attachment_scan::scan_all_active_notes_force(
+        &state.db,
+        &state.data_dir,
+    )
+    .map_err(|e: AppError| e.to_string())
 }
 
 /// T-S025: 清理远端孤儿附件
