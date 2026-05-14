@@ -239,11 +239,15 @@ export function AiWriteMenu({ editor, onAskAi }: AiWriteMenuProps) {
   const mediaNodesRef = useRef<MediaNodeSnapshot[]>([]);
   const menuRef = useRef<HTMLDivElement>(null);
   const unlistenRefs = useRef<UnlistenFn[]>([]);
-  // 最近一次 mouseup 的坐标（拖选完毕时记下来，让 AI 菜单贴在鼠标附近而不是
-  // 跑到选区末尾——长选区末尾常常在视口外）
-  const mouseUpPosRef = useRef<{ x: number; y: number; ts: number } | null>(
-    null,
-  );
+  // 选区锚点（wrapper-相对坐标）：selectionUpdate 时写入，useLayoutEffect 用
+  // 真实菜单尺寸做最终定位（上下翻转 / 横向 clamp）。
+  // 锚定到选区而非鼠标位置——拖选/键盘选行为一致，每次出现位置都可预期，
+  // 也避免长拖选时菜单贴到鼠标松开点导致和文字脱节的视觉感受。
+  const anchorRef = useRef<{
+    topInWrapper: number;
+    bottomInWrapper: number;
+    centerXInWrapper: number;
+  } | null>(null);
 
   // 首次挂载时拉一次提示词；管理页增删后由用户重新选中触发刷新（下面 selectionUpdate 里刷）。
   // 不做全局事件订阅：管理页和编辑器通常不同时打开，多拉一次成本可以忽略。
@@ -264,16 +268,6 @@ export function AiWriteMenu({ editor, onAskAi }: AiWriteMenuProps) {
 
   // 监听编辑器选区变化，显示/隐藏菜单
   useEffect(() => {
-    const dom = editor.view.dom as HTMLElement;
-    const onMouseUp = (e: MouseEvent) => {
-      mouseUpPosRef.current = {
-        x: e.clientX,
-        y: e.clientY,
-        ts: Date.now(),
-      };
-    };
-    dom.addEventListener("mouseup", onMouseUp);
-
     function handleSelectionUpdate() {
       const { from, to } = editor.state.selection;
       if (from === to) {
@@ -292,46 +286,41 @@ export function AiWriteMenu({ editor, onAskAi }: AiWriteMenuProps) {
       setSelectedText(text);
       selectionRangeRef.current = { from, to };
 
-      // 计算菜单位置：
-      //   1) 鼠标拖选 → 紧贴 mouseup 位置（最贴近用户视线）
-      //   2) 键盘选（Ctrl+A、Shift+方向）或 mouseup 已过期 → 兜底用选区末尾坐标
+      // 计算选区锚点：始终锚到"选区最末一行"，不再跟随鼠标位置。
+      // 拖选/键盘选行为一致；多行选区时贴在末行，离用户视觉焦点最近。
       const view = editor.view;
       const wrapper = view.dom.closest(".tiptap-wrapper") as HTMLElement | null;
       if (!wrapper) return;
       const wrapperRect = wrapper.getBoundingClientRect();
-      const mp = mouseUpPosRef.current;
-      const useMouse = mp && Date.now() - mp.ts < 400;
-      let top: number;
-      let left: number;
-      if (useMouse && mp) {
-        top = mp.y - wrapperRect.top + 8;
-        left = mp.x - wrapperRect.left + 8;
-      } else {
-        // 键盘选兜底：起点在视口里用起点；起点不行用终点；
-        // 全选/跨视口的极端情况两端都不在视口 → 锚点放在视口中央
-        const fromCoords = view.coordsAtPos(from);
-        const toCoords = view.coordsAtPos(to);
-        const vh = window.innerHeight;
-        const inViewport = (y: number) => y >= 0 && y <= vh - 60;
-        let anchorTop: number;
-        let anchorLeft: number;
-        if (inViewport(fromCoords.top)) {
-          anchorTop = fromCoords.bottom;
-          anchorLeft = fromCoords.left;
-        } else if (inViewport(toCoords.top)) {
-          anchorTop = toCoords.bottom;
-          anchorLeft = toCoords.left;
-        } else {
-          anchorTop = vh / 2;
-          anchorLeft = wrapperRect.left + 80;
-        }
-        top = anchorTop - wrapperRect.top + 6;
-        left = anchorLeft - wrapperRect.left;
+      const fromCoords = view.coordsAtPos(from);
+      const toCoords = view.coordsAtPos(to);
+      const isMultiLine = Math.abs(toCoords.top - fromCoords.top) > 4;
+
+      // 锚点 X：单行=选区中心，多行=末行起点（拖选鼠标停下来的方向）
+      const anchorCenterX = isMultiLine
+        ? toCoords.left
+        : (fromCoords.left + toCoords.right) / 2;
+
+      anchorRef.current = {
+        topInWrapper: toCoords.top - wrapperRect.top,
+        bottomInWrapper: toCoords.bottom - wrapperRect.top,
+        centerXInWrapper: anchorCenterX - wrapperRect.left,
+      };
+
+      // 初次定位（按估算尺寸先放一个合理值）：贴锚点上方、水平居中。
+      // useLayoutEffect 紧接着会用菜单的真实尺寸做最终校正（含上下翻转 / 横向 clamp），
+      // 浏览器 paint 前完成，用户看到的就是最终位置，没有闪烁。
+      const MENU_W_EST = 400;
+      const MENU_H_EST = 40;
+      const GAP = 8;
+      let left = anchorRef.current.centerXInWrapper - MENU_W_EST / 2;
+      let top = anchorRef.current.topInWrapper - MENU_H_EST - GAP;
+      if (top < 0) {
+        // 上方塞不下 → 翻到下方
+        top = anchorRef.current.bottomInWrapper + GAP;
       }
-      // 初次定位：先按 wrapper 宽度兜底 clamp（菜单实际宽度待渲染后由 useLayoutEffect 二次修正）
-      const wrapperH = wrapper.clientHeight;
-      left = Math.max(0, left);
-      top = Math.max(0, Math.min(wrapperH - 60, top));
+      left = Math.max(8, left);
+      top = Math.max(0, top);
       setPosition({ top, left });
 
       if (!streaming) {
@@ -344,25 +333,45 @@ export function AiWriteMenu({ editor, onAskAi }: AiWriteMenuProps) {
     editor.on("selectionUpdate", handleSelectionUpdate);
     return () => {
       editor.off("selectionUpdate", handleSelectionUpdate);
-      dom.removeEventListener("mouseup", onMouseUp);
     };
   }, [editor, streaming]);
 
-  // 渲染后用菜单**实际宽度**修正 left：保证整条按钮行单行显示，不被右边界挤换行
-  // useLayoutEffect 在浏览器 paint 前同步执行，避免用户看到先错位再修正的闪烁
+  // 渲染后用菜单**真实尺寸** + 选区锚点做最终定位：
+  //   - 垂直：优先上方；上方塞不下 → 翻到下方；再不行就 clamp 进 wrapper
+  //   - 水平：以锚点为中心，clamp 进 wrapper（两边各留 8px）
+  // useLayoutEffect 在浏览器 paint 前同步执行，避免用户看到先错位再修正的闪烁。
+  // streaming/result 切换时菜单尺寸变化 → 重跑一次，让结果面板从锚点上方"长出来"。
   useLayoutEffect(() => {
-    if (!visible || !menuRef.current) return;
+    if (!visible || !menuRef.current || !anchorRef.current) return;
     const wrapper = (editor.view.dom as HTMLElement).closest(
       ".tiptap-wrapper",
     ) as HTMLElement | null;
     if (!wrapper) return;
     const wrapperW = wrapper.clientWidth;
+    const wrapperH = wrapper.clientHeight;
     const menuW = menuRef.current.offsetWidth;
-    const maxLeft = Math.max(0, wrapperW - menuW - 8);
-    if (position.left > maxLeft) {
-      setPosition((p) => ({ ...p, left: maxLeft }));
+    const menuH = menuRef.current.offsetHeight;
+    const GAP = 8;
+    const a = anchorRef.current;
+
+    // 垂直：优先上方
+    const aboveTop = a.topInWrapper - menuH - GAP;
+    let finalTop: number;
+    if (aboveTop >= 0) {
+      finalTop = aboveTop;
+    } else {
+      finalTop = a.bottomInWrapper + GAP;
+      finalTop = Math.max(0, Math.min(wrapperH - menuH - GAP, finalTop));
     }
-  }, [visible, position.left, editor]);
+
+    // 水平：以锚点为中心 clamp
+    const idealLeft = a.centerXInWrapper - menuW / 2;
+    const finalLeft = Math.max(8, Math.min(wrapperW - menuW - 8, idealLeft));
+
+    if (finalTop !== position.top || finalLeft !== position.left) {
+      setPosition({ top: finalTop, left: finalLeft });
+    }
+  }, [visible, position.top, position.left, streaming, result, editor]);
 
   // 点击外部关闭（流式中 / 自定义弹窗打开时不响应，避免误关）
   useEffect(() => {
