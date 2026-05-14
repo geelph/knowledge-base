@@ -1346,6 +1346,14 @@ pub struct AttachmentEntry {
     pub mime: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ext: Option<String>,
+    /// 该附件在本机被引用过的所有相对路径（相对 `data_dir`），如
+    /// `["kb_assets/images/3/photo.png", "kb_assets/images/5/cover.png"]`。
+    /// **同一字节文件被多笔记引用时**这里会有多条；pull 端按此把 `sync_in/<hash>.<ext>` 拷到原位置，
+    /// 让 `kb-asset://kb_assets/images/...` 能命中。
+    /// 旧 manifest 不带此字段 → `Vec::new()`；pull 端遇到空 paths 时仍把字节存到 `sync_in/`，
+    /// 但不会还原到原路径（笔记里的引用就显示不出来——靠新写端 push 后下次 pull 才修上）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
 }
 
 /// V1 同步顶层携带的 vault 元数据（T-S014 端到端加密同步）

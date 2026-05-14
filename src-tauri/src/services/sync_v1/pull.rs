@@ -183,15 +183,65 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
 
             match backend.get_attachment(&att.hash) {
                 Ok(Some(bytes)) => {
+                    // 1) 总是落一份 sync_in/<hash>.<ext>（CAS 镜像，下次同步前的快取）
                     let ext = att.ext.as_deref().unwrap_or("bin");
-                    let target = sync_in_dir.join(format!("{}.{}", att.hash, ext));
-                    match std::fs::write(&target, &bytes) {
-                        Ok(_) => result.attachments_downloaded += 1,
-                        Err(e) => result.errors.push(format!(
-                            "写入附件 {} 失败: {}",
-                            target.display(),
-                            e
-                        )),
+                    let mirror = sync_in_dir.join(format!("{}.{}", att.hash, ext));
+                    if let Err(e) = std::fs::write(&mirror, &bytes) {
+                        result
+                            .errors
+                            .push(format!("写入附件 {} 失败: {}", mirror.display(), e));
+                        continue;
+                    }
+                    result.attachments_downloaded += 1;
+
+                    // 2) Bug 9：按 manifest 携带的 paths 把字节还原到原相对路径，让笔记里
+                    //    kb-asset://kb_assets/images/... 引用能命中。同 hash 多 path 全部还原。
+                    //    旧 manifest 不带 paths → 不还原（向后兼容；下次写端 push 后下次 pull 才修上）。
+                    for rel in &att.paths {
+                        // 防御：拒绝绝对路径 / 路径穿越（manifest 来自其他端，不能完全信任）
+                        if rel.is_empty()
+                            || rel.starts_with('/')
+                            || rel.starts_with('\\')
+                            || rel.contains("..")
+                            || rel.contains(":\\")
+                            || rel.contains(":/")
+                        {
+                            result.errors.push(format!(
+                                "拒绝可疑附件路径 {} (hash {})",
+                                rel,
+                                &att.hash[..att.hash.len().min(8)]
+                            ));
+                            continue;
+                        }
+                        let target = data_dir.join(rel);
+                        // 已存在且字节相同 → 跳过（避免覆盖用户本地版本，也减少 IO）
+                        if target.exists() {
+                            if let Ok(existing) = std::fs::read(&target) {
+                                if existing == bytes {
+                                    continue;
+                                }
+                            }
+                        }
+                        if let Some(parent) = target.parent() {
+                            if let Err(e) = std::fs::create_dir_all(parent) {
+                                result.errors.push(format!(
+                                    "创建附件目录失败 {}: {}",
+                                    parent.display(),
+                                    e
+                                ));
+                                continue;
+                            }
+                        }
+                        // 写盘后无须立刻 upsert note_attachments —— 下次 push 前 scan_all_active_notes
+                        // 会扫到引用这条 path 的笔记（因为 attachment_scan_at 此时落后于 updated_at），
+                        // 自动 upsert 进 note_attachments。这样避免 pull 端额外猜测哪条笔记引用了它。
+                        if let Err(e) = std::fs::write(&target, &bytes) {
+                            result.errors.push(format!(
+                                "还原附件到 {} 失败: {}",
+                                target.display(),
+                                e
+                            ));
+                        }
                     }
                 }
                 Ok(None) => result.errors.push(format!(

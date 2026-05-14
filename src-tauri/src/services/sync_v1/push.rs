@@ -636,6 +636,7 @@ mod tests {
                     size: 0,
                     mime: None,
                     ext: None,
+                    paths: vec![],
                 })
                 .collect(),
         }

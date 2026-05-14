@@ -237,6 +237,7 @@ mod tests {
                 size: 9,
                 mime: None,
                 ext: None,
+                paths: vec![],
             }],
         };
         backend.write_manifest(&manifest).unwrap();
@@ -318,6 +319,7 @@ mod tests {
                 size: 4,
                 mime: None,
                 ext: None,
+                paths: vec![],
             }],
             ..manifest_empty
         };

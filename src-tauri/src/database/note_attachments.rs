@@ -111,6 +111,31 @@ impl Database {
         Ok(rows)
     }
 
+    /// 按 sha256 列出**所有**本地路径（一附件可能被多笔记引用）。
+    ///
+    /// 给 push 端构造 `AttachmentEntry.paths` 用：让 manifest 携带"这个 hash 在写端的所有原路径"，
+    /// pull 端按这些路径把字节从 `sync_in/<hash>.<ext>` 拷到原位置，让笔记里的
+    /// `kb-asset://kb_assets/images/...` 引用能命中文件。
+    pub fn list_attachment_paths_by_hash(
+        &self,
+        sha256_hex: &str,
+    ) -> Result<Vec<String>, AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT local_rel_path FROM note_attachments
+             WHERE sha256_hex = ?1
+             ORDER BY local_rel_path",
+        )?;
+        let paths: Vec<String> = stmt
+            .query_map([sha256_hex], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(paths)
+    }
+
     /// 按 sha256 反查本地路径（任取一条）
     ///
     /// 同 hash 多 path 时返回第一条 — pull 端写入 `sync_in/<hash>.<ext>` 不依赖此查找；

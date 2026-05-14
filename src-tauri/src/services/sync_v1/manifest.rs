@@ -194,8 +194,9 @@ pub fn compute_local_manifest(
     // T-S014：附带本机 vault meta（如已设置），让其他端首次同步时能拉到 salt+verifier
     let vault_meta = crate::services::vault::VaultService::read_meta(db).unwrap_or(None);
 
-    // T-S022：附件清单（unique hashes from note_attachments）
-    // 失败仅 warn 不阻塞 manifest 生成；附件同步会在后续步骤识别"远端没有这些 hash"
+    // T-S022：附件清单（unique hashes from note_attachments）+ Bug 9：每个 hash 携带所有原相对路径
+    // 失败仅 warn 不阻塞 manifest 生成；附件同步会在后续步骤识别"远端没有这些 hash"。
+    // paths 让 pull 端能把 sync_in/<hash>.<ext> 还原到笔记里 kb-asset:// 引用的原始位置。
     let attachments: Vec<crate::models::AttachmentEntry> = match db.list_all_unique_attachments() {
         Ok(rows) => rows
             .into_iter()
@@ -204,11 +205,17 @@ pub fn compute_local_manifest(
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(|s| s.to_ascii_lowercase());
+                // 这一 hash 在本机被引用的所有路径（同 hash 多笔记引用时返回多条）；查不到 fallback 用
+                // list_all_unique_attachments 给的那一条 path，至少保证有一个还原目标。
+                let paths = db
+                    .list_attachment_paths_by_hash(&row.sha256_hex)
+                    .unwrap_or_else(|_| vec![row.local_rel_path.clone()]);
                 crate::models::AttachmentEntry {
                     hash: row.sha256_hex,
                     size: row.size,
                     mime: row.mime,
                     ext,
+                    paths,
                 }
             })
             .collect(),
@@ -312,15 +319,30 @@ pub fn merge_manifests(local: &SyncManifestV1, remote: &SyncManifestV1) -> SyncM
     }
     merged.sort_by(|a, b| a.stable_id.cmp(&b.stable_id));
 
-    // T-S022：附件清单合并（与笔记 entry 合并规则同——以 hash 为键 outer-join）。
-    // 本地附件清单全部保留 + 远端独有的 hash 也保留。
-    // 防止两端各上传过一些附件时，新写出的 manifest 漏掉对方的 hash → 拉端找不到引用。
-    let mut local_attachment_hashes: std::collections::HashSet<&str> =
-        local.attachments.iter().map(|a| a.hash.as_str()).collect();
-    let mut merged_attachments: Vec<crate::models::AttachmentEntry> =
-        local.attachments.clone();
+    // T-S022：附件清单合并（与笔记 entry 合并规则同——以 hash 为键 outer-join）+ Bug 9 paths 并集。
+    // 本地附件清单全部保留 + 远端独有的 hash 也保留 → 防止两端各上传过一些附件时漏掉对方的 hash。
+    // 同 hash 双方都有 → **paths 取并集**：A 端引用同一图在 path P_a、B 端引用在 P_b，本机（C 端）
+    // 写出的 manifest 必须同时带上 P_a 和 P_b，否则 D 端 pull 时只能把字节还原到我们 local 这一条
+    // path，B 端引用的 P_b 还原不了 → 笔记里 kb-asset:// 显示不出来。
+    let mut merged_attachments: Vec<crate::models::AttachmentEntry> = local.attachments.clone();
+    let mut local_idx: std::collections::HashMap<String, usize> = merged_attachments
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.hash.clone(), i))
+        .collect();
     for ra in &remote.attachments {
-        if local_attachment_hashes.insert(ra.hash.as_str()) {
+        if let Some(&i) = local_idx.get(&ra.hash) {
+            // 同 hash：合并 paths 并集（保持稳定顺序，去重）
+            let existing: std::collections::HashSet<String> =
+                merged_attachments[i].paths.iter().cloned().collect();
+            for p in &ra.paths {
+                if !existing.contains(p) {
+                    merged_attachments[i].paths.push(p.clone());
+                }
+            }
+            merged_attachments[i].paths.sort();
+        } else {
+            local_idx.insert(ra.hash.clone(), merged_attachments.len());
             merged_attachments.push(ra.clone());
         }
     }
@@ -1020,12 +1042,14 @@ mod tests {
                 size: 100,
                 mime: None,
                 ext: None,
+                paths: vec!["kb_assets/images/1/a.png".into()],
             },
             crate::models::AttachmentEntry {
                 hash: "local_only".into(),
                 size: 200,
                 mime: None,
                 ext: None,
+                paths: vec![],
             },
         ];
         let mut remote = manifest(vec![]);
@@ -1035,12 +1059,14 @@ mod tests {
                 size: 100,
                 mime: None,
                 ext: None,
+                paths: vec!["kb_assets/images/2/b.png".into()],
             },
             crate::models::AttachmentEntry {
                 hash: "remote_only".into(),
                 size: 300,
                 mime: None,
                 ext: None,
+                paths: vec![],
             },
         ];
 
@@ -1051,6 +1077,16 @@ mod tests {
         assert!(hashes.contains("common"));
         assert!(hashes.contains("local_only"));
         assert!(hashes.contains("remote_only"));
+
+        // Bug 9: 同 hash 双方都有 → paths 必须并集（local 的 a.png + remote 的 b.png）
+        let common = merged.attachments.iter().find(|a| a.hash == "common").unwrap();
+        assert!(
+            common.paths.contains(&"kb_assets/images/1/a.png".to_string())
+                && common.paths.contains(&"kb_assets/images/2/b.png".to_string()),
+            "common hash 的 paths 应是双方并集; got = {:?}",
+            common.paths
+        );
+        assert_eq!(common.paths.len(), 2);
     }
 
     // ───────── 日记重复 bug 修复：is_daily / daily_date 进 manifest ─────────
