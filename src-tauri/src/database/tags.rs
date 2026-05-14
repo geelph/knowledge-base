@@ -1,4 +1,4 @@
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::error::AppError;
 use crate::models::{Note, Tag};
@@ -138,6 +138,88 @@ impl Database {
             params![trimmed],
         )?;
         Ok(conn.last_insert_rowid())
+    }
+
+    /// Bug 12a 同步 V1 用：把笔记的标签关联**整体替换**成给定 name 列表（按 name 跨端）。
+    ///
+    /// - 空白 / 重复名字自动去掉（先 trim、再去重）
+    /// - 按 name find-or-create 本地 tag id（颜色不动 — color 是本地偏好不该被远端覆盖）
+    /// - 用事务一次性 DELETE 旧关联 + INSERT 新关联
+    /// - **不动 `notes.updated_at`**（标签变更是元数据，不是内容变更，不该触发 sync diff）
+    pub fn sync_note_tags(&self, note_id: i64, tag_names: &[String]) -> Result<(), AppError> {
+        // 规范化 name 列表：trim + 去掉空 + 按字符串去重（保持稳定顺序）
+        let mut seen = std::collections::HashSet::new();
+        let normalized: Vec<&str> = tag_names
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && seen.insert(s.to_string()))
+            .collect();
+
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let tx = conn.transaction()?;
+
+        // 1) 清掉本笔记现有关联（不删 tag 本身 — 别的笔记可能还在用）
+        tx.execute("DELETE FROM note_tags WHERE note_id = ?1", params![note_id])?;
+
+        // 2) 按 name find-or-create + 新增关联
+        for name in normalized {
+            // 先查
+            let tag_id: i64 = match tx
+                .query_row(
+                    "SELECT id FROM tags WHERE name = ?1",
+                    params![name],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+            {
+                Some(id) => id,
+                None => {
+                    tx.execute(
+                        "INSERT INTO tags (name, color) VALUES (?1, NULL)",
+                        params![name],
+                    )?;
+                    tx.last_insert_rowid()
+                }
+            };
+            tx.execute(
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
+                params![note_id, tag_id],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Bug 12a 同步 V1 用：一次性拿全库 (note_id → [tag_name, ...]) 映射，给 compute_local_manifest
+    /// 填 ManifestEntry.tags 用。比"每条 entry 单独查 get_note_tags(id)"快很多。
+    pub fn list_all_note_tag_names(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, Vec<String>>, AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT nt.note_id, t.name
+             FROM note_tags nt
+             JOIN tags t ON t.id = nt.tag_id
+             ORDER BY nt.note_id, t.name",
+        )?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut out: std::collections::HashMap<i64, Vec<String>> =
+            std::collections::HashMap::new();
+        for (note_id, name) in rows {
+            out.entry(note_id).or_default().push(name);
+        }
+        Ok(out)
     }
 
     /// 给笔记添加标签
@@ -289,5 +371,135 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok((notes, total))
+    }
+}
+
+#[cfg(test)]
+mod sync_tag_tests {
+    //! Bug 12a：sync_note_tags / list_all_note_tag_names
+
+    use crate::database::Database;
+    use crate::models::NoteInput;
+
+    fn fresh() -> Database {
+        Database::init(":memory:").unwrap()
+    }
+
+    fn note_tag_names(db: &Database, note_id: i64) -> Vec<String> {
+        let mut names: Vec<String> =
+            db.get_note_tags(note_id).unwrap().into_iter().map(|t| t.name).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn sync_note_tags_replace_set() {
+        let db = fresh();
+        let n = db
+            .create_note(&NoteInput {
+                title: "x".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+
+        // 初始无标签
+        assert!(note_tag_names(&db, n.id).is_empty());
+
+        // 设两个标签（不存在的会自动创建）
+        db.sync_note_tags(n.id, &vec!["工作".into(), "周报".into()]).unwrap();
+        assert_eq!(note_tag_names(&db, n.id), vec!["周报".to_string(), "工作".to_string()]);
+
+        // 改成新集合（去掉"周报"，加"个人"）
+        db.sync_note_tags(n.id, &vec!["工作".into(), "个人".into()]).unwrap();
+        assert_eq!(note_tag_names(&db, n.id), vec!["个人".to_string(), "工作".to_string()]);
+
+        // 清空
+        db.sync_note_tags(n.id, &[]).unwrap();
+        assert!(note_tag_names(&db, n.id).is_empty());
+    }
+
+    #[test]
+    fn sync_note_tags_normalizes_input() {
+        let db = fresh();
+        let n = db
+            .create_note(&NoteInput {
+                title: "x".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        db.sync_note_tags(
+            n.id,
+            &vec!["  工作  ".into(), "工作".into(), "".into(), "  ".into(), "周报".into()],
+        )
+        .unwrap();
+        // trim + 去重 + 跳过空 → 剩 ["工作","周报"]
+        assert_eq!(note_tag_names(&db, n.id), vec!["周报".to_string(), "工作".to_string()]);
+    }
+
+    #[test]
+    fn sync_note_tags_does_not_delete_other_notes_relations() {
+        let db = fresh();
+        let n1 = db
+            .create_note(&NoteInput {
+                title: "a".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let n2 = db
+            .create_note(&NoteInput {
+                title: "b".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        db.sync_note_tags(n1.id, &vec!["共享".into()]).unwrap();
+        db.sync_note_tags(n2.id, &vec!["共享".into(), "n2only".into()]).unwrap();
+
+        // 改 n1 → 不影响 n2
+        db.sync_note_tags(n1.id, &vec![]).unwrap();
+        assert!(note_tag_names(&db, n1.id).is_empty());
+        assert_eq!(
+            note_tag_names(&db, n2.id),
+            vec!["n2only".to_string(), "共享".to_string()]
+        );
+    }
+
+    #[test]
+    fn list_all_note_tag_names_groups_by_note() {
+        let db = fresh();
+        let n1 = db
+            .create_note(&NoteInput {
+                title: "a".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let n2 = db
+            .create_note(&NoteInput {
+                title: "b".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let n3 = db
+            .create_note(&NoteInput {
+                title: "c".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        db.sync_note_tags(n1.id, &vec!["x".into(), "y".into()]).unwrap();
+        db.sync_note_tags(n2.id, &vec!["x".into()]).unwrap();
+        // n3 无 tag
+
+        let map = db.list_all_note_tag_names().unwrap();
+        let mut n1_tags = map.get(&n1.id).cloned().unwrap_or_default();
+        n1_tags.sort();
+        assert_eq!(n1_tags, vec!["x".to_string(), "y".to_string()]);
+        assert_eq!(map.get(&n2.id).cloned().unwrap_or_default(), vec!["x".to_string()]);
+        assert!(map.get(&n3.id).is_none(), "无标签的 note_id 不该出现在 map 里");
     }
 }

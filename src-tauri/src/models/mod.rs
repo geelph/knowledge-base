@@ -1325,6 +1325,16 @@ pub struct ManifestEntry {
     /// 这里只让"隐藏状态"也跨端一致；pull 仅做单向恢复（远端隐藏 → 本地也隐藏），不反向取消隐藏。
     #[serde(default)]
     pub is_hidden: bool,
+    /// 笔记的标签名列表（按 name 跨端，不携带 id/color/sort_order —— color 是本地偏好不该跨端覆盖）。
+    ///
+    /// **`Option` 区分"字段缺失"和"显式空"** —— 不用 `Vec<String>` 因为无法区分：
+    /// - `None`（旧客户端 manifest 没这字段 / 加密笔记不带）→ pull 端**不动本地 tag 关联**
+    /// - `Some(vec![])`（新客户端写的，该笔记目前无标签）→ pull 端**清空本地 tag 关联**
+    /// - `Some(vec!["工作", "周报"])` → pull 端按 name find-or-create + 替换关联
+    ///
+    /// 这样"用户把笔记的所有标签删光"也能跨端传播，不会因为 empty 被当成"不动"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 /// V1 同步 manifest 顶层的附件清单条目（T-S022 sidecar CAS 附件同步）

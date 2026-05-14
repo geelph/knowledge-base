@@ -400,6 +400,16 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
                                 .errors
                                 .push(format!("对齐隐藏标记失败 {}: {}", entry.title, e));
                         }
+                        // Bug 12a：按 name 替换本地 tag 关联。Option 区分新旧客户端：
+                        //   None → 旧 manifest 没此字段 / 加密笔记 / tombstone → 不动
+                        //   Some(_) → 替换（含 Some(vec![]) → 清空，让"用户在另一端删空标签"也能跨端传播）
+                        if let Some(tag_names) = entry.tags.as_ref() {
+                            if let Err(e) = db.sync_note_tags(local_id, tag_names) {
+                                result
+                                    .errors
+                                    .push(format!("对齐标签失败 {}: {}", entry.title, e));
+                            }
+                        }
                         Some(local_id)
                     }
                     Err(e) => {
@@ -420,7 +430,17 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
                     entry.daily_date.as_deref(),
                     entry.is_hidden,
                 ) {
-                    Ok(n) => Some(n.id),
+                    Ok(n) => {
+                        // Bug 12a：新建笔记同步标签（旧 manifest tags=None → 跳过）
+                        if let Some(tag_names) = entry.tags.as_ref() {
+                            if let Err(e) = db.sync_note_tags(n.id, tag_names) {
+                                result
+                                    .errors
+                                    .push(format!("新建笔记设置标签失败 {}: {}", entry.title, e));
+                            }
+                        }
+                        Some(n.id)
+                    }
                     Err(e) => {
                         result
                             .errors

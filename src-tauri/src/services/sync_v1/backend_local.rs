@@ -202,6 +202,7 @@ mod tests {
                 is_daily: false,
                 daily_date: None,
                 is_hidden: false,
+                tags: None,
             }],
             hash_algo: Some(SyncManifestV1::HASH_ALGO_V2.into()),
             vault: None,

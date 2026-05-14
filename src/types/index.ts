@@ -1002,6 +1002,13 @@ export interface ManifestEntry {
   dailyDate?: string | null;
   /** 是否隐藏笔记（旧 manifest 无此字段；修复隐藏笔记跨端变可见时加入） */
   isHidden?: boolean;
+  /**
+   * Bug 12a: 笔记标签名列表（按 name 跨端，不带 id/color）。
+   * - undefined / null：旧客户端 manifest / 加密笔记 / tombstone → pull 端不动本地
+   * - []：该笔记当前无标签 → pull 端清空本地
+   * - ["a", "b"]：替换为该列表
+   */
+  tags?: string[] | null;
 }
 
 export interface SyncManifestV1 {

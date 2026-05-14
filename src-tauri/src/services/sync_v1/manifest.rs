@@ -71,7 +71,7 @@ pub fn compute_local_manifest(
     // 但 ALTER TABLE 没加 NOT NULL 约束）—— 极端异常路径下 NULL 行会被排除 manifest，
     // 不会被同步出去（自动隔离损坏数据）。
     let mut stmt = conn.prepare(
-        "SELECT stable_uuid, title, content_hash, updated_at, folder_id, is_deleted, deleted_at,
+        "SELECT id, stable_uuid, title, content_hash, updated_at, folder_id, is_deleted, deleted_at,
                 is_encrypted, encrypted_blob, is_daily, daily_date, is_hidden
          FROM notes
          WHERE stable_uuid IS NOT NULL
@@ -79,6 +79,7 @@ pub fn compute_local_manifest(
     )?;
     #[allow(clippy::type_complexity)]
     let rows: Vec<(
+        i64,            // id（Bug 12a 给 tags 关联用）
         String,
         String,
         String,
@@ -94,20 +95,21 @@ pub fn compute_local_manifest(
     )> = stmt
         .query_map(rusqlite::params![tombstone_cutoff], |row| {
             Ok((
-                row.get::<_, String>(0)?,
+                row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
                 // content_hash 列在 v22 之后由 DAO 维护，但 ALTER TABLE 没加 NOT NULL，
                 // 理论上极老的存量行可能仍为 NULL → 兜底空串（实践中 v22 迁移已回填）。
-                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, i64>(7)?,
-                row.get::<_, Option<Vec<u8>>>(8)?,
-                row.get::<_, i64>(9)?,
-                row.get::<_, Option<String>>(10)?,
-                row.get::<_, i64>(11)?,
+                row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, Option<Vec<u8>>>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, Option<String>>(11)?,
+                row.get::<_, i64>(12)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -132,8 +134,12 @@ pub fn compute_local_manifest(
         .map(|(id, p, name)| (id, (p, name)))
         .collect();
 
+    // Bug 12a：一次性拿全库 (note_id → tag names) 映射，避免 entries 循环里挨个查 DB
+    let tags_by_note_id = db.list_all_note_tag_names().unwrap_or_default();
+
     let mut entries = Vec::with_capacity(rows.len());
     for (
+        note_id,
         stable_uuid,
         title,
         content_hash_col,
@@ -172,6 +178,13 @@ pub fn compute_local_manifest(
             content_hash_col
         };
         let is_daily = is_daily_int != 0;
+        // Bug 12a：tombstone / 加密笔记不带 tags（None；前者已删，后者用户可能不希望标签明文同步）
+        // 普通笔记 → Some(...)：该笔记当前的标签列表（可能是空 vec[] 表示"无标签"，要让对端也清空）
+        let tags = if tombstone || encrypted {
+            None
+        } else {
+            Some(tags_by_note_id.get(&note_id).cloned().unwrap_or_default())
+        };
         entries.push(ManifestEntry {
             stable_id: stable_uuid.clone(),
             title: title.clone(),
@@ -185,6 +198,7 @@ pub fn compute_local_manifest(
             // 防御：非日记不带 daily_date（避免脏数据传播到其他端）
             daily_date: if is_daily { daily_date } else { None },
             is_hidden: is_hidden_int != 0,
+            tags,
         });
     }
 
@@ -437,9 +451,18 @@ pub fn diff_manifests(local: &SyncManifestV1, remote: &SyncManifestV1) -> Manife
                 // 内容一致，但元数据需要单向对齐（拉一次，update_note 内容不变，pull.rs 顺带补标记）：
                 // - 远端标记是日记、本地不是 → 恢复 is_daily（修历史"伪日记"）
                 // - 远端标记隐藏、本地不隐藏 → 恢复 is_hidden（避免隐藏笔记在新端变可见）
-                // 只做"远端有 → 本地补"这个单向修复；反方向（本地有、远端没有）不动，靠 merge_manifests
+                // - 双方都带 tags 但不同 → 拉一次同步标签（用户只改标签不改内容时 content_hash 不变，
+                //   不在这里触发的话标签变更永远传不到对端）
+                // 只做"远端有 → 本地补"的单向修复；反方向（本地有、远端没有）不动，靠 merge_manifests
                 // 用本地全量写远端 manifest 自然把标记带上去，下一轮其他端就能看到。
-                if (re.is_daily && !le.is_daily) || (re.is_hidden && !le.is_hidden) {
+                let tags_differ = match (le.tags.as_ref(), re.tags.as_ref()) {
+                    (Some(lt), Some(rt)) => lt != rt,
+                    _ => false, // 任一为 None（旧 manifest / 加密 / tombstone）→ 不据此触发
+                };
+                if (re.is_daily && !le.is_daily)
+                    || (re.is_hidden && !le.is_hidden)
+                    || tags_differ
+                {
                     diff.to_pull.push((*re).clone());
                 }
                 continue;
@@ -476,7 +499,21 @@ mod tests {
             is_daily: false,
             daily_date: None,
             is_hidden: false,
+            tags: None,
         }
+    }
+
+    /// 同 `entry` 但带显式 tags（Some(...)）— Bug 12a 标签同步相关测试用
+    fn entry_with_tags(
+        id: &str,
+        title: &str,
+        hash: &str,
+        ts: &str,
+        tags: Vec<&str>,
+    ) -> ManifestEntry {
+        let mut e = entry(id, title, hash, ts, false);
+        e.tags = Some(tags.into_iter().map(|s| s.to_string()).collect());
+        e
     }
 
     /// 同 `entry` 但显式给定每日笔记标记（is_daily 修复相关测试用）
@@ -1304,5 +1341,128 @@ mod tests {
         assert!(json.contains("\"isHidden\":true"), "got = {}", json);
         let json2 = serde_json::to_string(&manifest(vec![entry("1", "x", "h", "t", false)])).unwrap();
         assert!(json2.contains("\"isHidden\":false"), "got = {}", json2);
+    }
+
+    // ───────── Bug 12a：标签跨端同步 ─────────
+
+    /// compute_local_manifest 把每条笔记的标签名列表填进 entry.tags
+    #[test]
+    fn compute_local_manifest_carries_tags() {
+        use crate::models::NoteInput;
+        let db = Database::init(":memory:").unwrap();
+
+        let n = db
+            .create_note(&NoteInput {
+                title: "带标签".into(),
+                content: "x".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let no_tag = db
+            .create_note(&NoteInput {
+                title: "无标签".into(),
+                content: "y".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let tag1 = db.get_or_create_tag_by_name("工作").unwrap();
+        let tag2 = db.get_or_create_tag_by_name("周报").unwrap();
+        db.add_tag_to_note(n.id, tag1).unwrap();
+        db.add_tag_to_note(n.id, tag2).unwrap();
+
+        let m = compute_local_manifest(&db, "test", "host").unwrap();
+        let with_tag = m.entries.iter().find(|e| e.title == "带标签").unwrap();
+        assert_eq!(
+            with_tag.tags.as_ref().unwrap().iter().cloned().collect::<std::collections::HashSet<_>>(),
+            ["工作".to_string(), "周报".to_string()].into_iter().collect::<std::collections::HashSet<_>>()
+        );
+        let without_tag = m.entries.iter().find(|e| e.title == "无标签").unwrap();
+        assert_eq!(
+            without_tag.tags.as_ref().map(|v| v.is_empty()),
+            Some(true),
+            "无标签笔记 tags 应是 Some(vec![])（让 pull 端能把对端清空）"
+        );
+        let _ = no_tag;
+    }
+
+    /// diff：内容相同但 tags 不同 → 拉一次（让"只改标签"能跨端）
+    #[test]
+    fn diff_recovers_tags_when_only_tags_differ() {
+        let local = manifest(vec![entry_with_tags("1", "a", "h1", "t", vec!["工作"])]);
+        let remote = manifest(vec![entry_with_tags("1", "a", "h1", "t", vec!["工作", "周报"])]);
+        let d = diff_manifests(&local, &remote);
+        assert_eq!(d.to_pull.len(), 1, "tags 不同应触发拉取（content_hash 没变）");
+        assert_eq!(d.to_push.len(), 0);
+    }
+
+    /// diff：双方 tags 都为 None（旧客户端 / 加密 / tombstone）→ 不据此触发
+    #[test]
+    fn diff_no_pull_when_tags_both_none() {
+        let local = manifest(vec![entry("1", "a", "h1", "t", false)]);
+        let remote = manifest(vec![entry("1", "a", "h1", "t", false)]);
+        let d = diff_manifests(&local, &remote);
+        assert_eq!(d.to_pull.len(), 0);
+    }
+
+    /// diff：双方 tags 都 Some 且相等 → 不触发
+    #[test]
+    fn diff_no_pull_when_tags_equal() {
+        let e1 = entry_with_tags("1", "a", "h1", "t", vec!["工作", "周报"]);
+        let d = diff_manifests(&manifest(vec![e1.clone()]), &manifest(vec![e1]));
+        assert_eq!(d.to_pull.len(), 0);
+    }
+
+    /// diff：远端 Some(vec![]) 本地 Some(["a"]) → 拉一次（"用户清空标签"也能传播）
+    #[test]
+    fn diff_recovers_when_remote_clears_tags() {
+        let local = manifest(vec![entry_with_tags("1", "a", "h1", "t", vec!["a"])]);
+        let remote = manifest(vec![entry_with_tags("1", "a", "h1", "t", vec![])]);
+        let d = diff_manifests(&local, &remote);
+        assert_eq!(d.to_pull.len(), 1);
+    }
+
+    /// 旧 manifest 无 tags 字段 → 反序列化为 None；新 entry 序列化出 tags 字段
+    #[test]
+    fn tags_serde_compat() {
+        let old = r#"{"manifestVersion":1,"appVersion":"x","device":"x","generatedAt":"x","entries":[{"stableId":"u","title":"t","contentHash":"h","updatedAt":"u","remotePath":"notes/u.md"}]}"#;
+        let m: SyncManifestV1 = serde_json::from_str(old).unwrap();
+        assert!(m.entries[0].tags.is_none());
+
+        let json = serde_json::to_string(&manifest(vec![entry_with_tags("1", "x", "h", "t", vec!["work"])])).unwrap();
+        assert!(json.contains("\"tags\":[\"work\"]"), "got = {}", json);
+
+        // None 不应序列化（skip_serializing_if）
+        let json2 = serde_json::to_string(&manifest(vec![entry("1", "x", "h", "t", false)])).unwrap();
+        assert!(!json2.contains("\"tags\""), "tags=None 时不应序列化; got = {}", json2);
+    }
+
+    /// 加密笔记 tags 设 None（不在 manifest 里明文携带标签）
+    #[test]
+    fn compute_manifest_encrypted_note_has_no_tags() {
+        use crate::models::NoteInput;
+        let db = Database::init(":memory:").unwrap();
+        let n = db
+            .create_note(&NoteInput {
+                title: "密".into(),
+                content: "x".into(),
+                folder_id: None,
+            })
+            .unwrap();
+        let tag = db.get_or_create_tag_by_name("私密").unwrap();
+        db.add_tag_to_note(n.id, tag).unwrap();
+        // 标记加密（绕过完整 vault 流程，直接置位）
+        {
+            let conn = db.conn_lock().unwrap();
+            conn.execute(
+                "UPDATE notes SET is_encrypted = 1, encrypted_blob = ?1 WHERE id = ?2",
+                rusqlite::params![vec![0u8, 1, 2], n.id],
+            )
+            .unwrap();
+        }
+
+        let m = compute_local_manifest(&db, "t", "h").unwrap();
+        let e = m.entries.iter().find(|e| e.title == "密").unwrap();
+        assert!(e.encrypted);
+        assert!(e.tags.is_none(), "加密笔记 tags 应 None（不明文同步）");
     }
 }

@@ -617,6 +617,7 @@ mod tests {
             is_daily: false,
             daily_date: None,
             is_hidden: false,
+            tags: None,
         }
     }
 
