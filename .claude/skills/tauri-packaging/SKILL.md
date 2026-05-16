@@ -175,6 +175,40 @@ src-tauri/target/release/bundle/
 
 ---
 
+## 便携版（Portable Zip）打包
+
+> **本项目支持便携模式**：exe 同级有 `portable.txt` 哨兵文件就把数据写到安装目录而不是 C 盘 AppData。
+> resolver 在 `src-tauri/src/services/data_dir.rs::DataDirResolver::resolve()` 实现，
+> 优先级：`env > portable > pointer > default`。
+
+### 便携模式触发条件
+
+| 哨兵文件状态 | 数据根目录 |
+|------------|-----------|
+| `<exe同级>/portable.txt` 不存在 | 走默认（C 盘 AppData）或指针文件 |
+| `<exe同级>/portable.txt` 存在 + 内容空 | `<exe同级>/data/` |
+| `<exe同级>/portable.txt` 存在 + 绝对路径内容 | 该绝对路径 |
+| `<exe同级>/portable.txt` 存在 + 相对路径内容 | `<exe同级>/<相对路径>/` |
+
+### 打 portable.zip 的方法
+
+不需要改 tauri.conf.json / NSIS 配置。只要：
+
+1. 用正常的 `pnpm tauri build` 或 CI 出官方 NSIS 安装包
+2. 用 7-Zip 解压 NSIS exe（NSIS 内部本质是 7z）拿到程序文件目录
+3. 加一个空的 `portable.txt`
+4. zip 打包
+
+详细步骤见 `release-publish` 技能的「便携版（Portable Zip）」章节。
+
+### 不做的事
+
+- ❌ **不改 NSIS installMode 为 currentUser**：会破坏老用户升级路径
+- ❌ **不在 installer-hooks.nsi 里自动写 portable.txt**：增加分支复杂度，老用户升级风险
+- ❌ **不给 portable.zip 接 updater**：便携版升级靠用户重新下载解压覆盖
+
+---
+
 ## 🤖 移动端打包（Android）
 
 ### dev 模式 vs build 模式（先搞清楚这个）

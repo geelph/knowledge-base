@@ -543,19 +543,13 @@
   background: var(--kb-bg-content) !important;
 }
 
-/* Card 彩色顶线 */
+/* Card */
 [data-theme="dark-mocha"] .ant-card {
   background: var(--kb-bg-card) !important;
   border-color: var(--kb-border-card) !important;
   border-radius: 10px !important;
   position: relative;
   overflow: hidden;
-}
-[data-theme="dark-mocha"] .ant-card::before {
-  content: '';
-  position: absolute; top: 0; left: 0; right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, #f5bd69, #cba6f7);
 }
 [data-theme="dark-mocha"] .ant-card:hover {
   border-color: rgba(245,189,105,0.2) !important;
@@ -677,9 +671,19 @@ body.has-custom-bg .ant-layout-content {
 /* Sider 仍保留主题色，作为侧栏的"实色基底"，避免侧栏图标全部漂在背景图上读不出 */
 
 /* 暗色主题通用 — 编辑器 */
-[data-theme-category="dark"] .toolbar-btn-active {
-  color: var(--kb-text-primary) !important;
-  background: var(--kb-bg-active) !important;
+/* 工具栏激活态：实色主题色方块 + 白字（参考截图效果）
+ * - 背景：主题色 55% 透明度，叠在暗背景上呈现明显的实色块
+ * - 文字：纯白，对比强烈
+ * 用 html[...] 前缀拉高选择器特异性，避免被 global.css 中 .tiptap-toolbar .ant-btn:hover 等同特异性规则覆盖 */
+html[data-theme-category="dark"] .tiptap-toolbar .toolbar-btn-active,
+html[data-theme-category="dark"] .tiptap-toolbar .toolbar-btn-active:not(:disabled) {
+  color: #ffffff !important;
+  background: color-mix(in srgb, var(--kb-primary, #a78bfa) 55%, transparent) content-box !important;
+  padding: 2px !important;
+}
+html[data-theme-category="dark"] .tiptap-toolbar .toolbar-btn-active:hover:not(:disabled) {
+  color: #ffffff !important;
+  background: color-mix(in srgb, var(--kb-primary, #a78bfa) 70%, transparent) content-box !important;
 }
 [data-theme-category="dark"] .tiptap mark {
   background: rgba(255, 243, 191, 0.2);

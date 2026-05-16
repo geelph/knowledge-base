@@ -538,6 +538,10 @@ function DesktopSettingsPage() {
   const setAutoSaveEnabled = useAppStore((s) => s.setAutoSaveEnabled);
   const setAutoSaveDelay = useAppStore((s) => s.setAutoSaveDelay);
 
+  // 默认查看模式（打开笔记时默认是"编辑"还是"阅读"）
+  const defaultViewMode = useAppStore((s) => s.defaultViewMode);
+  const setDefaultViewMode = useAppStore((s) => s.setDefaultViewMode);
+
   // 订阅全局 foldersRefreshTick：Sidebar 修改文件夹后自动刷新设置页的文件夹选项
   // 走 idle defer：从笔记页切到设置页瞬间，路由 commit + 编辑器 destroy 已经吃掉一帧时间，
   // 这里再立即 invoke 会让首屏感知卡顿；推迟到 idle 让 UI 先出现
@@ -1744,6 +1748,26 @@ function DesktopSettingsPage() {
         }
       >
         <div className="flex items-center justify-between py-1">
+          <div>
+            <div>打开笔记时的默认模式</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              "阅读"模式下隐藏工具栏 + 不可编辑（避免误改），可在笔记顶部按钮临时切换。
+            </Text>
+          </div>
+          <Select
+            value={defaultViewMode}
+            onChange={setDefaultViewMode}
+            style={{ width: 140 }}
+            options={[
+              { value: "edit", label: "编辑模式（默认）" },
+              { value: "read", label: "阅读模式" },
+            ]}
+          />
+        </div>
+        <div
+          className="flex items-center justify-between py-1"
+          style={{ borderTop: "1px solid var(--ant-color-border-secondary, #f0f0f0)", marginTop: 8, paddingTop: 12 }}
+        >
           <div>
             <div>编辑笔记时自动保存</div>
             <Text type="secondary" style={{ fontSize: 12 }}>

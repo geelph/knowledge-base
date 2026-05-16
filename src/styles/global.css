@@ -333,21 +333,20 @@ body,
 }
 
 /* 大屏阅读宽度限制：避免在 2.5K / 4K logical 宽屏上正文行过长难以扫读。
-   - 1800px+: 1280 阅读宽度（≈80 字符/行）
-   - 2200px+: 1400 上限（更舒展，仍优于满屏铺开）
-   大纲打开时，编辑器主体在 grid 1fr 槽内继续居中，大纲仍贴右侧；
-   两侧空白带是预期效果，不是 bug。
+   - 1800px+: 1600 阅读宽度（原 1280 太窄，最大化时两侧空白过大）
+   - 2200px+: 1900 上限（更舒展，仍优于满屏铺开）
+   大纲打开时，编辑器主体在 grid 1fr 槽内继续居中，大纲仍贴右侧。
    工具栏的 negative margin -48px 仍能正确撑到 content-area 边缘。 */
 @media (min-width: 1800px) {
   .editor-content-area {
-    max-width: 1280px;
+    max-width: 1600px;
     margin-left: auto;
     margin-right: auto;
   }
 }
 @media (min-width: 2200px) {
   .editor-content-area {
-    max-width: 1400px;
+    max-width: 1900px;
   }
 }
 
@@ -547,14 +546,13 @@ body,
   align-items: center;
   /* 全量显示所有分组：放不下就自由换行成多行，不折叠、不横向滚动。 */
   flex-wrap: wrap;
-  column-gap: 1px;
+  /* 列间距：连续激活按钮（B/I/U 等）实色背景紧贴不好看，留 3px 让胶囊感分明 */
+  column-gap: 3px;
   row-gap: 4px;
   padding: 6px 14px;
   border-bottom: 1px solid var(--ant-color-border-secondary, #f0f0f0);
-  /* 与正文同色 + 轻磨砂，消除灰色底的突兀感 */
-  background: color-mix(in srgb, var(--ant-color-bg-container, #fff) 85%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  /* 与正文同色实底：去掉透明 + 磨砂，避免滚动时正文（代码块/表格）透上来撞色 */
+  background: var(--ant-color-bg-container, #fff);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -610,18 +608,28 @@ body,
   opacity: 0.35;
 }
 
-/* 活动态：主色淡底 */
-.toolbar-btn-active {
-  color: var(--ant-color-primary, #1677ff) !important;
-  background: var(--ant-color-primary-bg, #e6f4ff) !important;
+/* 活动态：实色主题色背景 + 白字（亮/暗主题统一，"按下"高亮感强）
+ * 用 .tiptap-toolbar 后代选择器拉高特异性（0,3,0），稳压 antd 默认 .ant-btn-text 系列
+ * 圆角 8px：让连续激活的 B/I/U 看起来像独立胶囊而不是连成一长条
+ * background-clip: content-box + padding 2px：紫色块比按钮小一圈，hit area 和图标位置不变 */
+.tiptap-toolbar .toolbar-btn-active,
+.tiptap-toolbar .toolbar-btn-active.ant-btn {
+  color: #ffffff !important;
+  background: var(--kb-primary, var(--ant-color-primary, #1677ff)) content-box !important;
+  border-color: transparent !important;
+  border-radius: 8px !important;
+  padding: 2px !important;
 }
 
-.tiptap-toolbar .toolbar-btn-active:hover:not(:disabled) {
-  background: var(--ant-color-primary-bg-hover, #bae0ff) !important;
-  color: var(--ant-color-primary, #1677ff) !important;
+.tiptap-toolbar .toolbar-btn-active:hover:not(:disabled),
+.tiptap-toolbar .toolbar-btn-active.ant-btn:hover:not(:disabled) {
+  color: #ffffff !important;
+  /* hover 时主题色叠 12% 黑加深，给"按下更深"的反馈 */
+  background: color-mix(in srgb, var(--kb-primary, var(--ant-color-primary, #1677ff)) 88%, #000) content-box !important;
+  border-color: transparent !important;
 }
 
-/* 暗色模式工具栏 — 见 themes.css */
+/* 暗色模式工具栏 — 见 themes.css（用 55% 透明，避免暗底上太刺眼） */
 
 /* ─── AI 写作 sticky bar ─────────────────────────────────────
  * 紧贴 EditorToolbar 正下方的次级工具栏，选中文字时滑入、取消选中滑出。
@@ -1469,6 +1477,48 @@ body,
   background-color: color-mix(in srgb, #faad14 30%, transparent);
 }
 [data-theme-category="dark"] .kb-search-active {
+  background-color: color-mix(in srgb, #fa8c16 55%, transparent);
+}
+/* 多词查找：不同 term 不同色（与浮条 chip 共享变量） */
+:root {
+  --kb-search-chip-bg-0: color-mix(in srgb, #faad14 22%, transparent);
+  --kb-search-chip-bg-1: color-mix(in srgb, #52c41a 22%, transparent);
+  --kb-search-chip-bg-2: color-mix(in srgb, #1677ff 22%, transparent);
+  --kb-search-chip-bg-3: color-mix(in srgb, #eb2f96 22%, transparent);
+  --kb-search-chip-bg-4: color-mix(in srgb, #722ed1 22%, transparent);
+  --kb-search-chip-bg-5: color-mix(in srgb, #13c2c2 22%, transparent);
+}
+.kb-search-match-0 { background-color: color-mix(in srgb, #faad14 35%, transparent); }
+.kb-search-match-1 { background-color: color-mix(in srgb, #52c41a 35%, transparent); }
+.kb-search-match-2 { background-color: color-mix(in srgb, #1677ff 32%, transparent); }
+.kb-search-match-3 { background-color: color-mix(in srgb, #eb2f96 32%, transparent); }
+.kb-search-match-4 { background-color: color-mix(in srgb, #722ed1 32%, transparent); }
+.kb-search-match-5 { background-color: color-mix(in srgb, #13c2c2 35%, transparent); }
+[data-theme-category="dark"] .kb-search-match-0 { background-color: color-mix(in srgb, #faad14 30%, transparent); }
+[data-theme-category="dark"] .kb-search-match-1 { background-color: color-mix(in srgb, #52c41a 28%, transparent); }
+[data-theme-category="dark"] .kb-search-match-2 { background-color: color-mix(in srgb, #1677ff 28%, transparent); }
+[data-theme-category="dark"] .kb-search-match-3 { background-color: color-mix(in srgb, #eb2f96 28%, transparent); }
+[data-theme-category="dark"] .kb-search-match-4 { background-color: color-mix(in srgb, #722ed1 28%, transparent); }
+[data-theme-category="dark"] .kb-search-match-5 { background-color: color-mix(in srgb, #13c2c2 30%, transparent); }
+/* active 永远叠加在 match-N 之后，保留橙色高亮 + outline */
+.kb-search-match.kb-search-active,
+.kb-search-match-0.kb-search-active,
+.kb-search-match-1.kb-search-active,
+.kb-search-match-2.kb-search-active,
+.kb-search-match-3.kb-search-active,
+.kb-search-match-4.kb-search-active,
+.kb-search-match-5.kb-search-active {
+  background-color: color-mix(in srgb, #fa8c16 65%, transparent);
+  outline: 1px solid #fa8c16;
+  outline-offset: 0;
+}
+[data-theme-category="dark"] .kb-search-match.kb-search-active,
+[data-theme-category="dark"] .kb-search-match-0.kb-search-active,
+[data-theme-category="dark"] .kb-search-match-1.kb-search-active,
+[data-theme-category="dark"] .kb-search-match-2.kb-search-active,
+[data-theme-category="dark"] .kb-search-match-3.kb-search-active,
+[data-theme-category="dark"] .kb-search-match-4.kb-search-active,
+[data-theme-category="dark"] .kb-search-match-5.kb-search-active {
   background-color: color-mix(in srgb, #fa8c16 55%, transparent);
 }
 

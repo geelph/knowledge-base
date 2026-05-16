@@ -38,6 +38,7 @@ const { Text } = Typography;
 
 const SOURCE_LABEL: Record<DataDirSource, { label: string; color: string }> = {
   env: { label: "环境变量", color: "purple" },
+  portable: { label: "便携模式", color: "cyan" },
   pointer: { label: "自定义路径", color: "geekblue" },
   default: { label: "默认", color: "default" },
 };
@@ -129,6 +130,9 @@ export function DataDirSection() {
 
   const sourceTag = info ? SOURCE_LABEL[info.source] : null;
   const isEnvOverride = info?.source === "env";
+  const isPortable = info?.source === "portable";
+  // env / portable 模式下 UI 不允许改路径（改了也会被启动期覆盖）
+  const lockUi = isEnvOverride || isPortable;
   const hasPending = info?.pendingDir != null;
 
   return (
@@ -161,7 +165,7 @@ export function DataDirSection() {
             tag={sourceTag}
             onCopy={copyPath}
             trailing={
-              !isEnvOverride && (
+              !lockUi && (
                 <Space size={4}>
                   {info.source === "pointer" && (
                     <Popconfirm
@@ -238,6 +242,23 @@ export function DataDirSection() {
                 环境变量驱动，UI 不允许覆盖；要修改请先 unset 该环境变量
               </Text>
             </div>
+          )}
+          {isPortable && (
+            <Alert
+              type="info"
+              showIcon
+              className="mt-2"
+              message="便携模式已启用"
+              description={
+                <span style={{ fontSize: 12 }}>
+                  exe 同级存在 <Text code>portable.txt</Text>{" "}
+                  哨兵文件 → 数据绑死在安装目录，不再写 C 盘 AppData。
+                  要更换数据位置，直接编辑该文件的内容（空 ={" "}
+                  <Text code>&lt;exe同级&gt;/data/</Text>
+                  ；或填绝对路径 / 相对路径），重启生效。
+                </span>
+              }
+            />
           )}
         </div>
       )}

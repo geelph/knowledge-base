@@ -597,6 +597,111 @@ git push github vx.y.z
 
 ---
 
+## 便携版（Portable Zip）— 发布时可选附带
+
+> **本节在每次桌面发布的步骤 7 之后、步骤 8 之前执行，作为可选附加产物。**
+> 不影响主流程（R2 + GitHub Release + update.json 还是正常的 NSIS 安装包）。
+> 便携版面向不想装到 Program Files / 想绑死安装目录 / 想 U 盘携带的用户。
+
+### 触发条件（不强制每次都做）
+
+- 用户明确说"这次顺手出个 portable.zip"
+- 大版本（1.x.0）发布
+- 默认：小版本（patch）不出 portable.zip，节省时间
+
+### portable.zip 的构造原理
+
+应用启动时 resolver 优先级链 `env > portable > pointer > default`，发现 exe 同级有 `portable.txt`
+就走便携模式：数据写到 `<exe同级>/data/`（空内容）或 portable.txt 里指定的路径。
+
+所以"做一个便携版" = 把官方 NSIS 安装出来的目录原样打包 + 加一个空的 `portable.txt`：
+
+```
+KnowledgeBase-Portable-vX.Y.Z/
+├── KnowledgeBase.exe
+├── kb-mcp.exe
+├── resources/
+├── ... (NSIS 安装目录里的所有文件)
+└── portable.txt          ← 空文件，触发便携模式
+```
+
+> 用户解压到任意目录 → 双击 exe → 数据全部写到 `data/` 子目录，不碰 C 盘 AppData。
+
+### 制作步骤（每次发布手动操作 ~3 分钟）
+
+在 CI 完成、产物已下载到 `releases/vX.Y.Z/` 之后：
+
+```bash
+# 1. 准备工作目录
+PORTABLE_DIR="E:/my/桌面软件tauri/knowledge-base-release/releases/vX.Y.Z/portable"
+mkdir -p "$PORTABLE_DIR"
+
+# 2. 用 NSIS 静默安装 + 抽出文件（推荐：直接从已有产物抽，不要装到本机注册表）
+#    NSIS exe 支持 /D=<dir> 静默装到指定目录，但会写注册表/快捷方式 → 不推荐
+#    更干净：直接用 7z 解压 NSIS exe（NSIS 安装包本质是 7z 压缩）
+#    （需要本机装 7-Zip：scoop install 7zip 或 winget install 7zip）
+TMPEXTRACT="$PORTABLE_DIR/_extract"
+mkdir -p "$TMPEXTRACT"
+"C:/Program Files/7-Zip/7z.exe" x \
+  "E:/my/桌面软件tauri/knowledge-base-release/releases/vX.Y.Z/Knowledge.Base_X.Y.Z_x64-setup.exe" \
+  -o"$TMPEXTRACT" -y
+
+# 3. NSIS 7z 内一般有 $PLUGINSDIR / $TEMP 等头部目录，实际程序在 $INSTDIR 对应的子目录
+#    抽取后查看实际结构（首次需要人眼对一下；之后稳定后可写死路径）
+ls "$TMPEXTRACT"
+
+# 4. 拷贝程序文件 + 加 portable.txt
+#    （假设抽出来的程序文件在 $TMPEXTRACT 根目录或某子目录，根据 ls 结果调整）
+APP_FILES="$TMPEXTRACT"   # 或具体子目录
+KB_PORTABLE="$PORTABLE_DIR/KnowledgeBase-Portable-vX.Y.Z"
+mkdir -p "$KB_PORTABLE"
+cp -r "$APP_FILES"/* "$KB_PORTABLE/"
+# 删掉 NSIS 卸载器（便携版不需要）
+rm -f "$KB_PORTABLE/uninstall.exe"
+# 加哨兵文件（空文件 = 数据写到 <exe同级>/data/）
+touch "$KB_PORTABLE/portable.txt"
+
+# 5. 打 zip
+cd "$PORTABLE_DIR"
+"C:/Program Files/7-Zip/7z.exe" a -tzip \
+  "KnowledgeBase-Portable-vX.Y.Z.zip" \
+  "KnowledgeBase-Portable-vX.Y.Z/" -mx=9
+
+# 6. 清理临时目录
+rm -rf "$TMPEXTRACT" "$KB_PORTABLE"
+
+# 7. 上传 R2（与官方安装包同目录）
+~/bin/rclone.exe copy \
+  "$PORTABLE_DIR/KnowledgeBase-Portable-vX.Y.Z.zip" \
+  "r2:downloads/knowledge-base/vX.Y.Z/" --progress
+
+# 8. 验证可下载
+curl -I "https://pub-9d9e6c0cb6934fb0a0c505e3c64f39b2.r2.dev/knowledge-base/vX.Y.Z/KnowledgeBase-Portable-vX.Y.Z.zip"
+```
+
+### README 下载表格补充
+
+在 release 仓库 README 的下载表格里加一行（Windows 平台下）：
+
+```markdown
+| Windows x64 (便携版 ⭐) | [KnowledgeBase-Portable-X.Y.Z.zip](releases/vX.Y.Z/KnowledgeBase-Portable-vX.Y.Z.zip) — 解压即用，数据在安装目录 |
+```
+
+### 注意事项
+
+- ✅ **跟自动更新无关**：portable.zip 不接 updater；用户要升级请重新下载 zip 解压覆盖。后续可考虑在 portable 模式下禁用 updater 弹窗（目前 updater 不会自动检测便携模式）
+- ✅ **签名/公钥与官方一致**：抽 NSIS 出来的 exe 是 CI 签过的，便携包里 exe 哈希与官方一致
+- ⚠️ **不要把 portable.zip 推到 GitHub Release**：它体积比官方 exe 大（~200MB），GitHub 上传慢；只放 R2
+- ⚠️ **不要 push 到 release 仓库**：portable.zip 是辅助产物，从 R2 直接分发即可，release 仓库 push 二进制本来就慢
+
+### 不实现"安装时自动写 portable.txt"
+
+之前讨论过让 NSIS POSTINSTALL 钩子检测旧数据后自动决定是否写 portable.txt——
+**已放弃**：风险 > 收益。改 installMode 会让升级路径变复杂，需要在虚拟机里跑全套
+升级测试。当前的 portable.zip 分发足够覆盖"想绑安装目录"的用户诉求。
+
+---
+
 ## 移动端（Android）独立发布
 
 > **桌面和移动端是两条独立的版本线、两条独立的发布管道，互不影响。**

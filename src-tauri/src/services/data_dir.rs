@@ -3,8 +3,13 @@
 //! ## 启动期解析优先级
 //!
 //! 1. 环境变量 `KB_DATA_DIR`（最高优先级；CI / 命令行 / 多版本测试用）
-//! 2. 指针文件 `<framework_app_data_dir>/data_dir.txt`（用户在 UI 改路径时写入）
-//! 3. 默认 `<framework_app_data_dir>`（兼容旧用户）
+//! 2. 便携模式：`<exe 同级>/portable.txt` 哨兵文件存在
+//!    - 内容空 → `<exe 同级>/data/`
+//!    - 内容是绝对路径 → 该路径
+//!    - 内容是相对路径 → `<exe 同级>/<相对路径>/`
+//!    （portable.zip 发行包用；带 portable.txt 一起解压即"绑死安装目录"）
+//! 3. 指针文件 `<framework_app_data_dir>/data_dir.txt`（用户在 UI 改路径时写入）
+//! 4. 默认 `<framework_app_data_dir>`（兼容旧用户）
 //!
 //! ## 设计要点
 //!
@@ -59,6 +64,8 @@ const MIGRATION_ITEMS: &[&str] = &[
 pub enum DataDirSource {
     /// 环境变量 KB_DATA_DIR 优先生效
     Env,
+    /// exe 同级 portable.txt 哨兵（便携模式 / portable.zip 发行包）
+    Portable,
     /// 指针文件 data_dir.txt 生效
     Pointer,
     /// 没有自定义；用框架默认 app_data_dir
@@ -106,7 +113,20 @@ impl DataDirResolver {
             }
         }
 
-        // 2. 指针文件
+        // 2. 便携模式：exe 同级 portable.txt 哨兵
+        //
+        // 不读 AppData 里的指针文件 —— 便携模式语义就是"绑死安装目录，不碰系统目录"；
+        // 把指针 surface 出来反而会让 portable.zip 用户看到陌生路径困惑。
+        if let Some(p) = detect_portable_data_dir()? {
+            return Ok(ResolvedDataDir {
+                default_dir: default_str,
+                current_dir: p.to_string_lossy().to_string(),
+                source: DataDirSource::Portable,
+                pending_dir: None,
+            });
+        }
+
+        // 3. 指针文件
         if let Some(target) = read_pointer(default_app_data_dir)? {
             let path = PathBuf::from(&target);
             std::fs::create_dir_all(&path)?;
@@ -118,7 +138,7 @@ impl DataDirResolver {
             });
         }
 
-        // 3. 默认
+        // 4. 默认
         Ok(ResolvedDataDir {
             default_dir: default_str.clone(),
             current_dir: default_str,
@@ -564,6 +584,51 @@ fn read_pointer(default_app_data_dir: &Path) -> Result<Option<String>, AppError>
     Ok(Some(s))
 }
 
+/// 便携模式哨兵文件名（位于 exe 同级目录）
+pub const PORTABLE_SENTINEL: &str = "portable.txt";
+
+/// 探测 exe 同级是否有 portable.txt；有则返回目标数据根目录
+///
+/// 失败优雅降级：current_exe 拿不到 / 无父目录 → 返回 None（不报错，回退到指针/默认）
+fn detect_portable_data_dir() -> Result<Option<PathBuf>, AppError> {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return Ok(None),
+    };
+    let exe_dir = match exe.parent() {
+        Some(d) => d.to_path_buf(),
+        None => return Ok(None),
+    };
+    detect_portable_in(&exe_dir)
+}
+
+/// 可测试的纯函数版：给定一个目录，检查里面的 portable.txt 并返回目标路径
+fn detect_portable_in(exe_dir: &Path) -> Result<Option<PathBuf>, AppError> {
+    let sentinel = exe_dir.join(PORTABLE_SENTINEL);
+    if !sentinel.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&sentinel)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let target = if content.is_empty() {
+        exe_dir.join("data")
+    } else if Path::new(&content).is_absolute() {
+        PathBuf::from(&content)
+    } else {
+        exe_dir.join(&content)
+    };
+    std::fs::create_dir_all(&target).map_err(|e| {
+        AppError::Custom(format!(
+            "便携模式目标目录创建失败 {}: {}",
+            target.display(),
+            e
+        ))
+    })?;
+    Ok(Some(target))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,6 +693,55 @@ mod tests {
         let app_data = temp_app_data();
         assert!(DataDirResolver::set_pending(&app_data, "").is_err());
         assert!(DataDirResolver::set_pending(&app_data, "   ").is_err());
+    }
+
+    // ─── Portable 模式检测测试 ───
+
+    #[test]
+    fn portable_no_sentinel_returns_none() {
+        let exe_dir = temp_app_data();
+        let r = detect_portable_in(&exe_dir).unwrap();
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn portable_empty_sentinel_uses_exe_sibling_data() {
+        let exe_dir = temp_app_data();
+        std::fs::write(exe_dir.join(PORTABLE_SENTINEL), b"").unwrap();
+        let r = detect_portable_in(&exe_dir).unwrap();
+        let target = r.expect("portable should be detected");
+        assert_eq!(target, exe_dir.join("data"));
+        assert!(target.exists(), "目标目录应被自动创建");
+    }
+
+    #[test]
+    fn portable_sentinel_with_whitespace_treated_as_empty() {
+        let exe_dir = temp_app_data();
+        std::fs::write(exe_dir.join(PORTABLE_SENTINEL), b"   \n  \r\n  ").unwrap();
+        let r = detect_portable_in(&exe_dir).unwrap();
+        assert_eq!(r.unwrap(), exe_dir.join("data"));
+    }
+
+    #[test]
+    fn portable_sentinel_with_absolute_path() {
+        let exe_dir = temp_app_data();
+        let custom = temp_app_data().join("portable-custom");
+        std::fs::write(
+            exe_dir.join(PORTABLE_SENTINEL),
+            custom.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        let r = detect_portable_in(&exe_dir).unwrap();
+        assert_eq!(r.unwrap(), custom);
+        assert!(custom.exists());
+    }
+
+    #[test]
+    fn portable_sentinel_with_relative_path_joined_to_exe_dir() {
+        let exe_dir = temp_app_data();
+        std::fs::write(exe_dir.join(PORTABLE_SENTINEL), b"my-data").unwrap();
+        let r = detect_portable_in(&exe_dir).unwrap();
+        assert_eq!(r.unwrap(), exe_dir.join("my-data"));
     }
 
     // 注意：env 变量测试单独跑（otherwise 会干扰其他测试），这里用 #[ignore] 标记，需要时手动跑

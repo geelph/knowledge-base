@@ -222,6 +222,8 @@ interface AppStore {
   autoSaveEnabled: boolean;
   /** 自动保存防抖延迟（毫秒，持久化） */
   autoSaveDelay: number;
+  /** 打开笔记时的默认查看模式（持久化）。'edit' = 编辑模式（默认），'read' = 阅读模式（隐藏工具栏，不可编辑） */
+  defaultViewMode: "edit" | "read";
   /** 笔记编辑页：右侧大纲面板是否显示（持久化）。标题数 < 2 时由组件自动隐藏，与此独立 */
   outlineVisible: boolean;
   /**
@@ -406,6 +408,8 @@ interface AppStore {
   setAutoSaveEnabled: (on: boolean) => void;
   /** 设置自动保存防抖延迟（毫秒，会 clamp 到 [500, 30000]） */
   setAutoSaveDelay: (ms: number) => void;
+  /** 设置默认查看模式（edit / read） */
+  setDefaultViewMode: (mode: "edit" | "read") => void;
   /** 切换大纲面板可见性（persist） */
   toggleOutline: () => void;
   /** 设置大纲面板可见性（persist） */
@@ -536,6 +540,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   uiScaleUserSet: false,
   autoSaveEnabled: false,
   autoSaveDelay: AUTO_SAVE_DELAY_DEFAULT,
+  defaultViewMode: "edit",
   outlineVisible: true,
   notesCollapsedFolderKeys: [],
   notesUncategorizedExpanded: false,
@@ -792,6 +797,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const clamped = Math.max(500, Math.min(30000, Math.round(Number(ms) || AUTO_SAVE_DELAY_DEFAULT)));
     set({ autoSaveDelay: clamped });
   },
+  setDefaultViewMode: (mode) => set({ defaultViewMode: mode === "read" ? "read" : "edit" }),
   toggleOutline: () => set((s) => ({ outlineVisible: !s.outlineVisible })),
   setOutlineVisible: (visible) => set({ outlineVisible: visible }),
   setNotesFolderCollapsed: (key, collapsed) =>
@@ -1172,6 +1178,10 @@ export async function loadThemeFromStore() {
     if (typeof asd === "number" && Number.isFinite(asd)) {
       useAppStore.getState().setAutoSaveDelay(asd);
     }
+    const dvm = await store.get<string>("defaultViewMode");
+    if (dvm === "read" || dvm === "edit") {
+      useAppStore.getState().setDefaultViewMode(dvm);
+    }
 
     // 恢复 NotesPanel 折叠偏好
     const nck = await store.get<string[]>("notesCollapsedFolderKeys");
@@ -1259,6 +1269,7 @@ export async function saveThemeToStore() {
       uiScaleUserSet,
       autoSaveEnabled,
       autoSaveDelay,
+      defaultViewMode,
       outlineVisible,
       notesCollapsedFolderKeys,
       notesUncategorizedExpanded,
@@ -1288,6 +1299,7 @@ export async function saveThemeToStore() {
     await store.set("uiScaleUserSet", uiScaleUserSet);
     await store.set("autoSaveEnabled", autoSaveEnabled);
     await store.set("autoSaveDelay", autoSaveDelay);
+    await store.set("defaultViewMode", defaultViewMode);
     await store.set("outlineVisible", outlineVisible);
     await store.set("notesCollapsedFolderKeys", notesCollapsedFolderKeys);
     await store.set("notesUncategorizedExpanded", notesUncategorizedExpanded);

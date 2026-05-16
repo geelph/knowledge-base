@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import type { Editor } from "@tiptap/react";
-import { getSearchState, type SearchOptions } from "./SearchAndReplace";
+import { getSearchState, type SearchOptions, type TermStat } from "./SearchAndReplace";
 
 interface Props {
   editor: Editor | null;
@@ -41,10 +41,11 @@ export function SearchReplaceBar({ editor, open, showReplace, onClose }: Props) 
     caseSensitive: false,
     wholeWord: false,
   });
-  const [stats, setStats] = useState<{ total: number; current: number }>({
-    total: 0,
-    current: -1,
-  });
+  const [stats, setStats] = useState<{
+    total: number;
+    current: number;
+    perTerm: TermStat[];
+  }>({ total: 0, current: -1, perTerm: [] });
   const queryInputRef = useRef<HTMLInputElement | null>(null);
 
   // ─── 打开时聚焦查询输入框 ───────────────────
@@ -61,7 +62,7 @@ export function SearchReplaceBar({ editor, open, showReplace, onClose }: Props) 
     editor.chain().setSearchTerm(query, options).run();
     // 同步状态显示
     const ps = getSearchState(editor.state);
-    if (ps) setStats({ total: ps.total, current: ps.current });
+    if (ps) setStats({ total: ps.total, current: ps.current, perTerm: ps.perTerm });
   }, [editor, open, query, options]);
 
   // ─── 监听 editor transactions：文档变更 / 跳转后更新 stats ───
@@ -69,7 +70,7 @@ export function SearchReplaceBar({ editor, open, showReplace, onClose }: Props) 
     if (!editor) return;
     const update = () => {
       const ps = getSearchState(editor.state);
-      if (ps) setStats({ total: ps.total, current: ps.current });
+      if (ps) setStats({ total: ps.total, current: ps.current, perTerm: ps.perTerm });
     };
     editor.on("transaction", update);
     return () => {
@@ -208,6 +209,34 @@ export function SearchReplaceBar({ editor, open, showReplace, onClose }: Props) 
           />
         </Tooltip>
       </div>
+
+      {/* ─── 多词分项行：仅当输入了 2+ 个 term 时显示 ─── */}
+      {stats.perTerm.length > 1 && (
+        <div
+          className="flex flex-wrap items-center gap-1"
+          style={{ fontSize: 11, color: token.colorTextTertiary }}
+        >
+          {stats.perTerm.map((t, i) => (
+            <span
+              key={`${t.term}-${i}`}
+              className="kb-search-chip"
+              style={{
+                padding: "1px 6px",
+                borderRadius: 4,
+                background:
+                  t.count > 0
+                    ? `var(--kb-search-chip-bg-${i % 6})`
+                    : token.colorFillTertiary,
+                color: t.count > 0 ? token.colorText : token.colorTextDisabled,
+                whiteSpace: "nowrap",
+              }}
+              title={`${t.term}: ${t.count} 处命中`}
+            >
+              {t.term} · {t.count}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* ─── 替换行（Ctrl+H 时显示） ────────── */}
       {showReplace && (
