@@ -101,6 +101,23 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| format!("写入文件失败 {}: {}", path, e))
 }
 
+/// 把 base64 编码的二进制数据写入指定路径。用于导出 PNG / PDF 等需要走原生 Save 对话框
+/// 的二进制文件——前端先调 `tauri-plugin-dialog::save()` 拿到目标路径，再把 base64
+/// 后的数据传到这里。
+///
+/// 为什么不直接收 `Vec<u8>`：Tauri IPC 默认 JSON 编码会把字节数组序列化成 number 数组，
+/// 体积膨胀 ~10 倍且大图片可能卡住。base64 编码后是普通字符串，序列化高效。
+///
+/// 安全：路径由用户在原生 Save 对话框选定，调用方传啥写啥。
+#[tauri::command]
+pub fn write_binary_file(path: String, base64_data: String) -> Result<(), String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&base64_data)
+        .map_err(|e| format!("base64 解码失败: {}", e))?;
+    std::fs::write(&path, bytes).map_err(|e| format!("写入文件失败 {}: {}", path, e))
+}
+
 /// 将用户选择的图片复制为主题背景图，落到 framework_app_data_dir 根的 `theme-bg.<ext>`。
 ///
 /// 为什么要复制：

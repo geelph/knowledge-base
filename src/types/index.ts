@@ -126,6 +126,8 @@ export interface Tag {
   name: string;
   color: string | null;
   note_count: number;
+  /** 父标签 id，null = 顶层。v39 schema 引入的树形层级 */
+  parent_id: number | null;
 }
 
 /** 创建/更新标签入参 */
@@ -815,6 +817,58 @@ export interface Task {
   /** 总子任务数 */
   subtask_total: number;
   links: TaskLink[];
+  /** 工作流看板列归属：'todo' / 'doing' / 'done'（v40 引入） */
+  kanban_stage: KanbanStage;
+  /** 所属项目 ID（v41 引入）；null = 无项目 */
+  project_id: number | null;
+  /** 甘特图开始日期 'YYYY-MM-DD'（v41 引入）；null = 没指定开始时间 */
+  start_date: string | null;
+}
+
+/** 工作流看板的列归属 */
+export type KanbanStage = "todo" | "doing" | "done";
+
+// ─── 项目（v41） ──────────────────────────────────
+
+/** 项目（工作流容器，含时间维度和归档状态） */
+export interface Project {
+  id: number;
+  name: string;
+  description: string | null;
+  color: string;
+  /** 计划开始日期 'YYYY-MM-DD' */
+  startDate: string | null;
+  /** 计划结束日期 'YYYY-MM-DD' */
+  endDate: string | null;
+  archived: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  /** 项目下未完成任务数（status=0，只计主任务） */
+  activeTaskCount: number;
+  /** 项目下已完成任务数（status=1，只计主任务） */
+  doneTaskCount: number;
+}
+
+export interface CreateProjectInput {
+  name: string;
+  description?: string | null;
+  color?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+export interface UpdateProjectInput {
+  name?: string;
+  description?: string;
+  clearDescription?: boolean;
+  color?: string;
+  startDate?: string;
+  clearStartDate?: boolean;
+  endDate?: string;
+  clearEndDate?: boolean;
+  archived?: boolean;
+  sortOrder?: number;
 }
 
 export interface TaskLinkInput {
@@ -865,6 +919,14 @@ export interface UpdateTaskInput {
   category_id?: number | null;
   /** 传 true 显式清空，落到"未分类" */
   clear_category_id?: boolean;
+  /** 改所属项目；不传 = 不动 */
+  project_id?: number | null;
+  /** 传 true 显式清空 project_id（落到"无项目"） */
+  clear_project_id?: boolean;
+  /** 甘特图开始日期 'YYYY-MM-DD'；不传 = 不动 */
+  start_date?: string | null;
+  /** 传 true 显式清空 start_date */
+  clear_start_date?: boolean;
 }
 
 export interface TaskQuery {
@@ -1101,8 +1163,14 @@ export interface SyncV1ProgressEvent {
 
 // ─── T-013 自定义数据目录 ──────────────────────
 
-/** 数据目录来源 */
-export type DataDirSource = "env" | "pointer" | "default";
+/** 数据目录来源
+ *
+ * - `env`：环境变量 `KB_DATA_DIR` 临时覆盖
+ * - `portable`：exe 同级 `portable.txt` 哨兵（便携模式 / portable.zip 发行包）
+ * - `pointer`：用户在 UI 改路径写入的指针文件 `data_dir.txt`
+ * - `default`：默认 framework_app_data_dir（C 盘 AppData）
+ */
+export type DataDirSource = "env" | "portable" | "pointer" | "default";
 
 /** 当前数据目录解析结果 */
 export interface ResolvedDataDir {
@@ -1110,9 +1178,9 @@ export interface ResolvedDataDir {
   defaultDir: string;
   /** 当前生效的数据根目录 */
   currentDir: string;
-  /** 来源（env / pointer / default）*/
+  /** 来源（env / portable / pointer / default）*/
   source: DataDirSource;
-  /** 指针文件里写的路径（可能与 current 不一致：env 临时覆盖时；为 null 表示无指针） */
+  /** 指针文件里写的路径（可能与 current 不一致：env 临时覆盖时；portable 模式下为 null） */
   pendingDir: string | null;
 }
 

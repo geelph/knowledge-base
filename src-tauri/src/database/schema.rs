@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::error::AppError;
 
 /// 当前 Schema 版本
-pub const SCHEMA_VERSION: i32 = 38;
+pub const SCHEMA_VERSION: i32 = 41;
 
 /// 获取数据库版本
 pub fn get_version(conn: &Connection) -> Result<i32, AppError> {
@@ -68,6 +68,9 @@ pub fn migrate(conn: &Connection) -> Result<(), AppError> {
             35 => migrate_v35_to_v36(conn)?,
             36 => migrate_v36_to_v37(conn)?,
             37 => migrate_v37_to_v38(conn)?,
+            38 => migrate_v38_to_v39(conn)?,
+            39 => migrate_v39_to_v40(conn)?,
+            40 => migrate_v40_to_v41(conn)?,
             _ => {
                 return Err(AppError::Custom(format!("未知的数据库版本: {}", version)));
             }
@@ -1557,5 +1560,107 @@ fn migrate_v37_to_v38(conn: &Connection) -> Result<(), AppError> {
     }
 
     set_version(conn, 38)?;
+    Ok(())
+}
+
+/// v38 -> v39: 标签树形结构支持（tags.parent_id）
+///
+/// 设计：parent_id INTEGER NULL，NULL 表示顶层标签。引用 tags(id) 但 SQLite ALTER 加 FK
+/// 实际不会生效（且 foreign_keys 默认 OFF），所以"删父级时孩子置 NULL"的语义在 Service 层主动处理。
+fn migrate_v38_to_v39(conn: &Connection) -> Result<(), AppError> {
+    log::info!("数据库迁移: v38 -> v39 (tags.parent_id 树形结构支持)");
+
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(tags)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "parent_id") {
+        conn.execute_batch(
+            "ALTER TABLE tags ADD COLUMN parent_id INTEGER;
+             CREATE INDEX IF NOT EXISTS idx_tags_parent ON tags(parent_id);",
+        )?;
+    }
+
+    set_version(conn, 39)?;
+    Ok(())
+}
+
+/// v40 -> v41: 项目 + 甘特图（projects 表 + tasks.project_id + tasks.start_date）
+///
+/// 与 task_categories 的区别：
+/// - task_categories 是轻量"分类"（彩色圆点 + 名字），跨项目复用
+/// - projects 是更高一级的"工作流容器"，有时间维度（start/end_date）和归档状态
+/// - 一个任务可以同时挂 category（横切分组）+ project（项目归属）
+///
+/// `start_date` 是甘特图条左端；`due_date`（已存在）是右端。
+/// `ON DELETE SET NULL` 让删项目时任务回到"无项目"，不级联误删。
+fn migrate_v40_to_v41(conn: &Connection) -> Result<(), AppError> {
+    log::info!("数据库迁移: v40 -> v41 (projects 表 + tasks.project_id / start_date)");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS projects (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            description TEXT,
+            color       TEXT NOT NULL DEFAULT '#1677ff',
+            start_date  TEXT,
+            end_date    TEXT,
+            archived    INTEGER NOT NULL DEFAULT 0,
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_archived ON projects(archived, sort_order);
+        ",
+    )?;
+
+    let task_cols = list_columns(conn, "tasks")?;
+    if !task_cols.iter().any(|c| c == "project_id") {
+        conn.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN project_id INTEGER
+                REFERENCES projects(id) ON DELETE SET NULL;
+             CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)
+                WHERE project_id IS NOT NULL;",
+        )?;
+    }
+    if !task_cols.iter().any(|c| c == "start_date") {
+        conn.execute_batch("ALTER TABLE tasks ADD COLUMN start_date TEXT;")?;
+    }
+
+    set_version(conn, 41)?;
+    Ok(())
+}
+
+/// v39 -> v40: 工作流看板阶段（tasks.kanban_stage）
+///
+/// 与 status (0=todo/1=done) 互补——status 是"是否完成"，kanban_stage 是"看板列归属"。
+/// 双向语义同步在 Service 层做：
+/// - 勾完成 status=1 时把 kanban_stage 设为 'done'
+/// - 拖到 done 列把 status 设为 1（含 completed_at）
+/// - 拖回 todo/doing 把 status 设为 0
+///
+/// 初始数据：status=1 的老任务回填 'done'；其余 'todo'。
+fn migrate_v39_to_v40(conn: &Connection) -> Result<(), AppError> {
+    log::info!("数据库迁移: v39 -> v40 (tasks.kanban_stage 工作流看板)");
+
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(tasks)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !cols.iter().any(|c| c == "kanban_stage") {
+        conn.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN kanban_stage TEXT NOT NULL DEFAULT 'todo';
+             CREATE INDEX IF NOT EXISTS idx_tasks_kanban_stage ON tasks(kanban_stage);",
+        )?;
+        // 老的已完成任务回填到 done 列
+        conn.execute_batch(
+            "UPDATE tasks SET kanban_stage = 'done' WHERE status = 1;",
+        )?;
+    }
+
+    set_version(conn, 40)?;
     Ok(())
 }

@@ -65,6 +65,9 @@ import type {
   TaskCategory,
   CreateTaskCategoryInput,
   UpdateTaskCategoryInput,
+  Project,
+  CreateProjectInput,
+  UpdateProjectInput,
   PromptTemplate,
   PromptTemplateInput,
   PlanTodayRequest,
@@ -118,6 +121,9 @@ export const systemApi = {
   /** 把任意文本写入指定路径（UTF-8）。配合 dialog.save() 用于前端导出 SVG/JSON 等。 */
   writeTextFile: (path: string, content: string) =>
     invoke<void>("write_text_file", { path, content }),
+  /** 把 base64 编码的二进制数据写入指定路径。配合 dialog.save() 用于导出 PNG/PDF 等。 */
+  writeBinaryFile: (path: string, base64Data: string) =>
+    invoke<void>("write_binary_file", { path, base64Data }),
 };
 
 /** 更新相关 API */
@@ -224,6 +230,9 @@ export const noteApi = {
   /** 把指定笔记弹到独立 OS 窗口（双显示器对照 / 主副屏分屏用） */
   openInNewWindow: (id: number) =>
     invoke<void>("open_note_in_new_window", { noteId: id }),
+  /** 把指定笔记的思维导图弹到独立 OS 窗口（纯导图视图，方便双屏对照） */
+  openMindMapInNewWindow: (id: number) =>
+    invoke<void>("open_mindmap_in_new_window", { noteId: id }),
 };
 
 /** T-003 隐藏笔记专用 API（/hidden 页面） */
@@ -370,14 +379,18 @@ export const linkApi = {
 
 /** 标签 API */
 export const tagApi = {
-  create: (name: string, color?: string) =>
-    invoke<Tag>("create_tag", { name, color }),
+  /** 创建标签；parentId 传 null/undefined 即创建顶层标签 */
+  create: (name: string, color?: string, parentId?: number | null) =>
+    invoke<Tag>("create_tag", { name, color, parentId: parentId ?? null }),
   list: () => invoke<Tag[]>("list_tags"),
   rename: (id: number, name: string) =>
     invoke<void>("rename_tag", { id, name }),
   /** 修改标签颜色；传 null 清除自定义颜色走默认样式 */
   setColor: (id: number, color: string | null) =>
     invoke<void>("set_tag_color", { id, color }),
+  /** 移动标签到新父级；parentId=null 提升为顶层 */
+  setParent: (id: number, parentId: number | null) =>
+    invoke<void>("set_tag_parent", { id, parentId }),
   delete: (id: number) => invoke<void>("delete_tag", { id }),
   addToNote: (noteId: number, tagId: number) =>
     invoke<void>("add_tag_to_note", { noteId, tagId }),
@@ -583,7 +596,33 @@ export const attachmentApi = {
     invoke<void>("delete_note_attachments", { noteId }),
   /** 获取附件存储目录（设置页"打开目录"入口） */
   getAttachmentsDir: () => invoke<string>("get_attachments_dir"),
+  /** 把 .xlsx/.xls/.xlsm/.xlsb/.ods 附件解析为前端可渲染的结构化 sheets/rows */
+  previewExcel: (rel: string) =>
+    invoke<ExcelPreviewData>("preview_excel_attachment", { rel }),
+  /** 读取附件为文本（md/txt/json/csv/代码等），超长自动截断 */
+  previewText: (rel: string) =>
+    invoke<TextPreviewData>("preview_text_attachment", { rel }),
 };
+
+/** Excel 预览：单个 Sheet 的结构化数据（headers + rows） */
+export interface ExcelSheetData {
+  name: string;
+  headers: string[];
+  rows: string[][];
+  totalRows: number;
+  truncatedRows: number;
+}
+
+export interface ExcelPreviewData {
+  sheets: ExcelSheetData[];
+  totalRows: number;
+}
+
+export interface TextPreviewData {
+  content: string;
+  totalLines: number;
+  truncated: boolean;
+}
 
 /** 图片 API
  *
@@ -866,6 +905,9 @@ export const taskApi = {
   update: (id: number, input: UpdateTaskInput) =>
     invoke<boolean>("update_task", { id, input }),
   toggleStatus: (id: number) => invoke<number>("toggle_task_status", { id }),
+  /** 设置工作流看板列：'todo' / 'doing' / 'done'；done 自动标 status=1 */
+  setKanbanStage: (id: number, stage: "todo" | "doing" | "done") =>
+    invoke<void>("set_task_kanban_stage", { id, stage }),
   delete: (id: number) => invoke<boolean>("delete_task", { id }),
   /** 批量删除任务（多选模式用），返回实际删除条数 */
   deleteBatch: (ids: number[]) =>
@@ -923,6 +965,23 @@ export const taskCategoryApi = {
     invoke<boolean>("update_task_category", { id, input }),
   /** 删除分类。任务的 category_id 会因 ON DELETE SET NULL 自动落到未分类 */
   delete: (id: number) => invoke<boolean>("delete_task_category", { id }),
+};
+
+/** 项目 API（v41）——任务的工作流容器 + 甘特图的根 */
+export const projectApi = {
+  /** 列出项目。默认隐藏归档项目 */
+  list: (includeArchived?: boolean) =>
+    invoke<Project[]>("list_projects", {
+      includeArchived: includeArchived ?? false,
+    }),
+  get: (id: number) =>
+    invoke<Project | null>("get_project", { id }),
+  create: (input: CreateProjectInput) =>
+    invoke<number>("create_project", { input }),
+  update: (id: number, input: UpdateProjectInput) =>
+    invoke<void>("update_project", { id, input }),
+  /** 删除项目。任务的 project_id 因 ON DELETE SET NULL 自动落到"无项目" */
+  delete: (id: number) => invoke<void>("delete_project", { id }),
 };
 
 /** 闪卡 + FSRS 复习 API */

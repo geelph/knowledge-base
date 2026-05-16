@@ -20,7 +20,7 @@ import {
   App as AntdApp,
   theme as antdTheme,
 } from "antd";
-import { ArrowLeft, Save, Trash2, Pin, FolderOpen, Tags, Link2, Share, Maximize2, Minimize2, FileText as FileTextIcon, ChevronRight, ChevronDown, CornerUpLeft, Folder as FolderIcon, Eye, EyeOff, Lock, Unlock, MessageSquare, ListTree, Network, ExternalLink } from "lucide-react";
+import { ArrowLeft, Save, Trash2, Pin, FolderOpen, Tags, Link2, Share, Maximize2, Minimize2, FileText as FileTextIcon, ChevronRight, ChevronDown, CornerUpLeft, Folder as FolderIcon, Eye, EyeOff, Lock, Unlock, MessageSquare, ListTree, Network, ExternalLink, BookOpen, FilePen } from "lucide-react";
 import { CloseCircleFilled } from "@ant-design/icons";
 import { useAppStore } from "@/store";
 import { useTabsStore } from "@/store/tabs";
@@ -614,6 +614,9 @@ function DesktopNoteEditorPage() {
   // 上下文感知的 message / notification（避免静态方法丢主题、偶发不显示）
   const { message, notification } = AntdApp.useApp();
   const { focusMode, setFocusMode } = useAppStore();
+  // 阅读模式：初值跟全局默认（设置页可改），每篇笔记独立 state，切笔记不残留上一篇状态
+  const defaultViewMode = useAppStore((s) => s.defaultViewMode);
+  const [readingMode, setReadingMode] = useState<boolean>(defaultViewMode === "read");
   const { openTab, updateTabTitle, setTabDirty, setDraft, getDraft, clearDraft } = useTabsStore();
   const [note, setNote] = useState<Note | null>(null);
   const [title, setTitle] = useState("");
@@ -724,6 +727,12 @@ function DesktopNoteEditorPage() {
   const [pdfPreviewMaximized, setPdfPreviewMaximized] = useState(false);
 
   const noteId = Number(id);
+
+  // 切到不同笔记时重置阅读模式为全局默认（避免上一篇手动切换的状态残留到下一篇）
+  useEffect(() => {
+    setReadingMode(defaultViewMode === "read");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noteId]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -1660,6 +1669,13 @@ function DesktopNoteEditorPage() {
           ) : null}
         </Space>
         <Space align="center">
+          <Tooltip title={readingMode ? "切换到编辑模式" : "切换到阅读模式（隐藏工具栏，不可编辑）"}>
+            <Button
+              type={readingMode ? "primary" : "default"}
+              icon={readingMode ? <BookOpen size={16} /> : <FilePen size={16} />}
+              onClick={() => setReadingMode((v) => !v)}
+            />
+          </Tooltip>
           <Tooltip title={focusMode ? "退出专注模式 (Esc)" : "专注模式 (F11)"}>
             <Button
               icon={focusMode ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
@@ -1762,15 +1778,17 @@ function DesktopNoteEditorPage() {
               />
             </Badge>
           </Tooltip>
-          <Button
-            type="primary"
-            icon={<Save size={16} />}
-            loading={saving}
-            onClick={() => handleSave()}
-            disabled={!dirty}
-          >
-            保存
-          </Button>
+          {!readingMode && (
+            <Button
+              type="primary"
+              icon={<Save size={16} />}
+              loading={saving}
+              onClick={() => handleSave()}
+              disabled={!dirty}
+            >
+              保存
+            </Button>
+          )}
           {note?.source_file_path && (
             note?.source_file_type === "md" ? (
               // 外部 .md 双向同步关联：主按钮用系统应用打开，下拉菜单提供"解除关联"
@@ -1991,6 +2009,7 @@ function DesktopNoteEditorPage() {
             onChange={handleContentChange}
             placeholder="开始写点什么..."
             noteId={noteId}
+            readingMode={readingMode}
             onWikiLinkClick={handleWikiLinkClick}
             onAskAi={(selected) => {
               // 选段触发 → 选段挂到抽屉的"引用 chip"，输入框留空给用户写问题
@@ -2128,6 +2147,8 @@ function DesktopNoteEditorPage() {
             onClose={() => setMindMapOpen(false)}
             markdown={content}
             title={title}
+            noteId={Number.isFinite(noteId) ? noteId : null}
+            variant="embed"
           />
         </div>
       )}

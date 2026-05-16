@@ -132,12 +132,17 @@ pub struct Folder {
 // ─── 标签 ─────────────────────────────────────
 
 /// 标签（返回给前端，含关联笔记数）
+///
+/// `parent_id` 为 None 表示顶层标签；树形层级在 v39 schema 引入。
+/// `note_count` 是该标签**直接关联**的笔记数（不递归子标签）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tag {
     pub id: i64,
     pub name: String,
     pub color: Option<String>,
     pub note_count: usize,
+    #[serde(default)]
+    pub parent_id: Option<i64>,
 }
 
 /// 创建/更新标签的入参
@@ -742,6 +747,17 @@ pub struct Task {
     pub category_id: Option<i64>,
     /// 父任务 ID；None = 主任务，Some(id) = 子任务
     pub parent_task_id: Option<i64>,
+    /// 工作流看板列归属：'todo' / 'doing' / 'done'（v40 引入，与 status 互补）。
+    /// `serde(default)` 让旧 schema 反序列化时回退到 "todo"，避免破坏老 fixture。
+    #[serde(default = "default_kanban_stage")]
+    pub kanban_stage: String,
+    /// 所属项目 ID（v41 引入）；None = 未挂项目
+    #[serde(default)]
+    pub project_id: Option<i64>,
+    /// 甘特图条左端日期 'YYYY-MM-DD'（v41 引入）；None = 没指定开始时间。
+    /// 配合 `due_date`（右端）形成时间区间；只有右端没左端时甘特图渲染为"截止点"
+    #[serde(default)]
+    pub start_date: Option<String>,
     /// 已完成子任务数（仅主任务有意义；子任务恒为 0）
     #[serde(default)]
     pub subtask_done: i32,
@@ -749,6 +765,67 @@ pub struct Task {
     #[serde(default)]
     pub subtask_total: i32,
     pub links: Vec<TaskLink>,
+}
+
+fn default_kanban_stage() -> String {
+    "todo".to_string()
+}
+
+// ─── 项目（v41） ──────────────────────────────────
+
+/// 项目：任务的"工作流容器"，带时间维度（start/end）和归档状态。
+///
+/// 与 task_categories 的区别：
+/// - category 是轻量"圆点+名字"分类，可跨项目复用
+/// - project 是"立项-推进-归档"语义，是甘特图的根
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub color: String,
+    /// 项目计划开始日期 'YYYY-MM-DD'
+    pub start_date: Option<String>,
+    /// 项目计划结束日期 'YYYY-MM-DD'
+    pub end_date: Option<String>,
+    pub archived: bool,
+    pub sort_order: i32,
+    pub created_at: String,
+    pub updated_at: String,
+    /// 该项目下"未完成"任务数（status=0）
+    #[serde(default)]
+    pub active_task_count: i64,
+    /// 该项目下"已完成"任务数（status=1）
+    #[serde(default)]
+    pub done_task_count: i64,
+}
+
+/// 创建项目入参
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectInput {
+    pub name: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+}
+
+/// 更新项目入参（字段缺省表示不改）
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProjectInput {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub clear_description: Option<bool>,
+    pub color: Option<String>,
+    pub start_date: Option<String>,
+    pub clear_start_date: Option<bool>,
+    pub end_date: Option<String>,
+    pub clear_end_date: Option<bool>,
+    pub archived: Option<bool>,
+    pub sort_order: Option<i32>,
 }
 
 /// 创建任务入参
@@ -801,6 +878,14 @@ pub struct UpdateTaskInput {
     pub category_id: Option<i64>,
     /// 传 true 显式清空 category_id（落到"未分类"）
     pub clear_category_id: Option<bool>,
+    /// 所属项目 ID（v41 引入）；None 不动；传 Some(id) 改
+    pub project_id: Option<i64>,
+    /// 传 true 显式清空 project_id（落到"无项目"）
+    pub clear_project_id: Option<bool>,
+    /// 甘特图开始日期 'YYYY-MM-DD'（v41 引入）；None 不动
+    pub start_date: Option<String>,
+    /// 传 true 显式清空 start_date
+    pub clear_start_date: Option<bool>,
 }
 
 /// 任务关联入参（新建任务时一起传）
@@ -1146,6 +1231,40 @@ pub enum MessageAttachment {
         #[serde(default)]
         truncated: bool,
     },
+}
+
+// ─── 附件可视化预览（前端 Modal 用，区别于上面给 AI 用的） ──────────────
+
+/// 单个 Sheet 的结构化数据（前端用 antd Table 直接渲染）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcelSheetData {
+    pub name: String,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    /// 原始总行数（截断前）
+    pub total_rows: usize,
+    /// 被截断省略的中间行数（0 = 没截断）
+    pub truncated_rows: usize,
+}
+
+/// Excel/ODS 的多 Sheet 预览数据包
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcelPreviewData {
+    pub sheets: Vec<ExcelSheetData>,
+    /// 文件总行数（所有 sheet 累计）
+    pub total_rows: usize,
+}
+
+/// 纯文本预览（md/txt/json/csv/代码等）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPreviewData {
+    pub content: String,
+    pub total_lines: usize,
+    /// 超大文件尾部被截断（避免一次塞死前端）
+    pub truncated: bool,
 }
 
 // ─── AI 写笔记并归档（T-006） ──────────────

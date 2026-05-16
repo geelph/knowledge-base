@@ -181,3 +181,15 @@ pub async fn clip_url_to_note(
 pub async fn open_note_in_new_window(app: tauri::AppHandle, note_id: i64) -> Result<(), String> {
     popout_window::open_note(&app, note_id).map_err(|e| e.to_string())
 }
+
+/// 把指定笔记的思维导图弹到独立 OS 窗口（纯导图视图，不带编辑器）
+///
+/// 同 note_id 已存在 popout-mindmap 窗口则直接前置。仅桌面端。
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn open_mindmap_in_new_window(
+    app: tauri::AppHandle,
+    note_id: i64,
+) -> Result<(), String> {
+    popout_window::open_mindmap(&app, note_id).map_err(|e| e.to_string())
+}

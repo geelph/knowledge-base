@@ -952,6 +952,7 @@ pub fn run() {
             commands::system::get_multi_instance_enabled,
             commands::system::set_multi_instance_enabled,
             commands::system::write_text_file,
+            commands::system::write_binary_file,
             commands::system::resolve_asset_absolute_path,
             commands::system::copy_theme_bg,
             commands::system::clear_theme_bg,
@@ -987,6 +988,8 @@ pub fn run() {
             // 多窗口 pop-out（笔记对照 / 双显示器分屏）
             #[cfg(desktop)]
             commands::notes::open_note_in_new_window,
+            #[cfg(desktop)]
+            commands::notes::open_mindmap_in_new_window,
             // T-007 笔记加密 / Vault
             commands::vault::vault_status,
             commands::vault::vault_setup,
@@ -1049,6 +1052,7 @@ pub fn run() {
             commands::tags::list_tags,
             commands::tags::rename_tag,
             commands::tags::set_tag_color,
+            commands::tags::set_tag_parent,
             commands::tags::delete_tag,
             commands::tags::add_tag_to_note,
             commands::tags::remove_tag_from_note,
@@ -1139,6 +1143,8 @@ pub fn run() {
             commands::attachment::save_note_attachment_from_path,
             commands::attachment::delete_note_attachments,
             commands::attachment::get_attachments_dir,
+            commands::attachment::preview_excel_attachment,
+            commands::attachment::preview_text_attachment,
             // 模板模块
             commands::template::list_templates,
             commands::template::get_template,
@@ -1195,6 +1201,7 @@ pub fn run() {
             commands::tasks::create_task,
             commands::tasks::update_task,
             commands::tasks::toggle_task_status,
+            commands::tasks::set_task_kanban_stage,
             commands::tasks::delete_task,
             commands::tasks::delete_tasks_batch,
             commands::tasks::complete_tasks_batch,
@@ -1218,6 +1225,12 @@ pub fn run() {
             commands::tasks::create_task_category,
             commands::tasks::update_task_category,
             commands::tasks::delete_task_category,
+            // 项目（v41，配合甘特图）
+            commands::projects::list_projects,
+            commands::projects::get_project,
+            commands::projects::create_project,
+            commands::projects::update_project,
+            commands::projects::delete_project,
             // 语音识别（ASR）
             commands::asr::asr_get_config,
             commands::asr::asr_save_config,

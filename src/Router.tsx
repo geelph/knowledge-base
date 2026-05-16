@@ -24,6 +24,7 @@ import QuickCapturePage from "@/pages/quick-capture";
 import FeatureTogglePage from "@/pages/feature-toggle";
 import MigrationSplash from "@/pages/migration-splash";
 import EmergencyReminderPage from "@/pages/emergency-reminder";
+import MindMapPopoutPage from "@/pages/mindmap-popout";
 
 // 路由级 errorElement：路由内任何同步渲染异常（如 TipTap 在老 WebView 上
 // 的 lookbehind 正则解析失败）都会被 RouteErrorFallback 接管，给用户友好
@@ -39,6 +40,12 @@ const router = createHashRouter([
   {
     path: "/emergency-reminder/:id",
     element: <EmergencyReminderPage />,
+    errorElement: <RouteErrorFallback />,
+  },
+  // 思维导图独立弹窗：纯导图视图，不挂 AppLayout（由 popout_window.rs::open_mindmap 加载）
+  {
+    path: "/mindmap-popout/:noteId",
+    element: <MindMapPopoutPage />,
     errorElement: <RouteErrorFallback />,
   },
   // 移动端 AI 聊天页：独立全屏路由（不走 MobileLayout / AppLayout），

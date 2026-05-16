@@ -3,7 +3,7 @@
   "identifier": "default",
   "description": "桌面端主窗口默认权限（仅 Windows / macOS / Linux）",
   "platforms": ["windows", "macOS", "linux"],
-  "windows": ["main", "emergency-*", "popout-note-*"],
+  "windows": ["main", "emergency-*", "popout-note-*", "popout-mindmap-*"],
   "permissions": [
     "core:default",
     "core:window:default",
