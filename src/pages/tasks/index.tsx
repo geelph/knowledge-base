@@ -45,13 +45,15 @@ import { MicButton } from "@/components/MicButton";
 import { useAppStore } from "@/store";
 import type { Task, TaskPriority, TaskCategory } from "@/types";
 
-type ViewMode = "list" | "kanban" | "quadrant" | "calendar";
+type ViewMode = "list" | "kanban" | "quadrant" | "calendar" | "gantt";
 import { CreateTaskModal } from "@/components/tasks/CreateTaskModal";
 import { SubtaskList } from "@/components/tasks/SubtaskList";
 import { TaskDetailModal } from "@/components/tasks/TaskDetailModal";
 import { KanbanView } from "@/components/tasks/KanbanView";
 import { QuadrantView } from "@/components/tasks/QuadrantView";
 import { CalendarView } from "@/components/tasks/CalendarView";
+import { GanttView } from "@/components/tasks/GanttView";
+import { ProjectManageModal } from "@/components/tasks/ProjectManageModal";
 
 const { Text, Paragraph } = Typography;
 
@@ -267,6 +269,7 @@ function DesktopTasksPage() {
   /** 行点击 → 只读详情 Modal（与首页一致）；编辑走 hover Edit / 右键菜单 → setEditing */
   const [detailViewing, setDetailViewing] = useState<Task | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [projectManageOpen, setProjectManageOpen] = useState(false);
   const [presetPriority, setPresetPriority] = useState<TaskPriority | undefined>(undefined);
   const [presetImportant, setPresetImportant] = useState<boolean | undefined>(undefined);
   const [presetDueDate, setPresetDueDate] = useState<string | undefined>(undefined);
@@ -369,7 +372,9 @@ function DesktopTasksPage() {
       //   · 列表视图：filter=todo（"全部任务"默认入口）拉全部，已完成进底部折叠区；
       //     其他 filter（如 done / urgent / today...）维持原 status 行为。
       let statusArg: 0 | 1 | undefined;
-      if (viewMode === "calendar") {
+      // 甘特图 / 日历都要看全量（含已完成）才能展示完整时间线；
+      // 看板 / 四象限默认只看未完成（已完成的去 list 视图查）
+      if (viewMode === "calendar" || viewMode === "gantt") {
         statusArg = undefined;
       } else if (viewMode === "kanban" || viewMode === "quadrant") {
         statusArg = 0;
@@ -536,8 +541,19 @@ function DesktopTasksPage() {
               { label: "看板", value: "kanban" },
               { label: "四象限", value: "quadrant" },
               { label: "日历", value: "calendar" },
+              { label: "甘特图", value: "gantt" },
             ]}
           />
+          {viewMode === "gantt" && (
+            <Button
+              size="small"
+              icon={<FolderIcon size={14} />}
+              onClick={() => setProjectManageOpen(true)}
+              title="项目管理"
+            >
+              项目管理
+            </Button>
+          )}
           {viewMode === "list" && (
             <Button
               icon={multiSelect ? <IconX size={14} /> : <ListChecks size={14} />}
@@ -621,6 +637,12 @@ function DesktopTasksPage() {
             setPresetDueDate(ymd);
             setCreateOpen(true);
           }}
+        />
+      ) : viewMode === "gantt" ? (
+        <GanttView
+          tasks={tasks}
+          onRefresh={loadTasks}
+          onEdit={setEditing}
         />
       ) : tasks.length === 0 ? (
         <Empty
@@ -904,6 +926,11 @@ function DesktopTasksPage() {
         onEdit={(t) => setEditing(t)}
       />
       {/* AI 规划 / 添加待办的三个 Modal 已封装进 NewTodoButton；本页面不再单独挂 */}
+      <ProjectManageModal
+        open={projectManageOpen}
+        onClose={() => setProjectManageOpen(false)}
+        onChanged={() => loadTasks()}
+      />
     </div>
   );
 }

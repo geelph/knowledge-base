@@ -41,6 +41,7 @@ pub mod pdf;
 // 笔记 pop-out 窗口仅桌面端（移动端改 Modal）
 #[cfg(desktop)]
 pub mod popout_window;
+pub mod project;
 pub mod prompt;
 pub mod quick_capture;
 pub mod safe_filename;

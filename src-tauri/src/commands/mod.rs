@@ -18,6 +18,7 @@ pub mod mobile_update;
 pub mod notes;
 pub mod orphan;
 pub mod pdf;
+pub mod projects;
 pub mod prompt;
 pub mod search;
 // 全局快捷键仅桌面端可用（移动端无此概念）
