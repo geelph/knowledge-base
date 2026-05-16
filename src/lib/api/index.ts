@@ -68,6 +68,7 @@ import type {
   Project,
   CreateProjectInput,
   UpdateProjectInput,
+  DataviewRow,
   PromptTemplate,
   PromptTemplateInput,
   PlanTodayRequest,
@@ -965,6 +966,33 @@ export const taskCategoryApi = {
     invoke<boolean>("update_task_category", { id, input }),
   /** 删除分类。任务的 category_id 会因 ON DELETE SET NULL 自动落到未分类 */
   delete: (id: number) => invoke<boolean>("delete_task_category", { id }),
+};
+
+/** Dataview 块 API（v1.12 最简）—— 5 个固定模板查询 */
+export const dataviewApi = {
+  recentNotes: (limit?: number) =>
+    invoke<DataviewRow[]>("dataview_recent_notes", {
+      limit: limit ?? null,
+    }),
+  notesByTag: (tag: string, limit?: number) =>
+    invoke<DataviewRow[]>("dataview_notes_by_tag", {
+      tag,
+      limit: limit ?? null,
+    }),
+  notesByFolder: (folderId: number, limit?: number) =>
+    invoke<DataviewRow[]>("dataview_notes_by_folder", {
+      folderId,
+      limit: limit ?? null,
+    }),
+  pendingTasks: (limit?: number) =>
+    invoke<DataviewRow[]>("dataview_pending_tasks", {
+      limit: limit ?? null,
+    }),
+  tasksByProject: (projectId: number, limit?: number) =>
+    invoke<DataviewRow[]>("dataview_tasks_by_project", {
+      projectId,
+      limit: limit ?? null,
+    }),
 };
 
 /** 项目 API（v41）——任务的工作流容器 + 甘特图的根 */

@@ -1231,6 +1231,12 @@ pub fn run() {
             commands::projects::create_project,
             commands::projects::update_project,
             commands::projects::delete_project,
+            // Dataview 块（v1.12 最简，5 个固定模板查询）
+            commands::dataview::dataview_recent_notes,
+            commands::dataview::dataview_notes_by_tag,
+            commands::dataview::dataview_notes_by_folder,
+            commands::dataview::dataview_pending_tasks,
+            commands::dataview::dataview_tasks_by_project,
             // 语音识别（ASR）
             commands::asr::asr_get_config,
             commands::asr::asr_save_config,

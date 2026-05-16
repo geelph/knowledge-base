@@ -33,6 +33,7 @@ import {
   CalendarDays,
   CalendarClock,
   Clock,
+  Database,
   type LucideIcon,
 } from "lucide-react";
 import { imageApi, videoApi } from "@/lib/api";
@@ -263,6 +264,72 @@ const BASIC_SLASH_ITEMS: SlashCommandItem[] = [
     keywords: ["危险", "danger", "callout", "error", "wx"],
     command: ({ editor, range }) => {
       editor.chain().focus().deleteRange(range).toggleCallout("danger").run();
+    },
+  },
+
+  // ─── 数据视图（v1.12 引入） ───
+  {
+    key: "dataview-recent-notes",
+    title: "数据视图：最近笔记",
+    subtitle: "动态展示最近修改的笔记列表",
+    group: "数据视图",
+    icon: Database,
+    keywords: ["数据视图", "dataview", "最近", "笔记", "sjsq", "zjbj"],
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertDataview({ kind: "recent-notes", limit: 10 })
+        .run();
+    },
+  },
+  {
+    key: "dataview-pending-tasks",
+    title: "数据视图：未完成任务",
+    subtitle: "动态展示所有未完成任务",
+    group: "数据视图",
+    icon: Database,
+    keywords: ["数据视图", "dataview", "任务", "未完成", "todo", "wwc"],
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertDataview({ kind: "pending-tasks", limit: 10 })
+        .run();
+    },
+  },
+  {
+    key: "dataview-notes-by-tag",
+    title: "数据视图：按标签筛选笔记",
+    subtitle: "插入后点齿轮选标签",
+    group: "数据视图",
+    icon: Database,
+    keywords: ["数据视图", "dataview", "标签", "tag", "bq"],
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertDataview({ kind: "notes-by-tag", limit: 10 })
+        .run();
+    },
+  },
+  {
+    key: "dataview-tasks-by-project",
+    title: "数据视图：项目下的任务",
+    subtitle: "插入后点齿轮选项目",
+    group: "数据视图",
+    icon: Database,
+    keywords: ["数据视图", "dataview", "项目", "project", "xm"],
+    command: ({ editor, range }) => {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertDataview({ kind: "tasks-by-project", limit: 10 })
+        .run();
     },
   },
 

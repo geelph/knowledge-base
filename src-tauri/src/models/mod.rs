@@ -771,6 +771,29 @@ fn default_kanban_stage() -> String {
     "todo".to_string()
 }
 
+// ─── Dataview 块（v1.12 引入，最简模板版） ────────────
+
+/// Dataview 查询结果的统一行结构。
+///
+/// 不论查的是笔记 / 任务 / 其它，都规范化成 (title + subtitle + 跳转目标)，
+/// 前端用一套渲染逻辑（antd Table / List）。
+///
+/// - `link_kind = "note"` → 点击跳转 `/notes/<link_id>`
+/// - `link_kind = "task"` → 点击打开任务详情 Modal（前端按 id 自行拉详情）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataviewRow {
+    pub title: String,
+    /// 副标题：紧急度+截止日 / 文件夹路径 / 标签列表 等辅助信息
+    pub subtitle: Option<String>,
+    pub link_kind: String,
+    pub link_id: i64,
+    pub updated_at: String,
+    /// 扩展字段（v1 不用，v2 给富展示模板留口）
+    #[serde(default)]
+    pub extra: Option<serde_json::Value>,
+}
+
 // ─── 项目（v41） ──────────────────────────────────
 
 /// 项目：任务的"工作流容器"，带时间维度（start/end）和归档状态。

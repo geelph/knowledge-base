@@ -4,6 +4,7 @@ pub mod attachment;
 pub mod cards;
 pub mod config;
 pub mod daily;
+pub mod dataview;
 pub mod data_dir;
 pub mod export;
 pub mod folders;

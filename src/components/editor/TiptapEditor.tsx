@@ -205,6 +205,7 @@ import { VideoTimestamp } from "./VideoTimestamp";
 import { EmbedVideo } from "./EmbedVideoNode";
 import { AllowFileLink } from "./AllowFileLink";
 import { Callout } from "./Callout";
+import { DataviewBlock } from "./DataviewBlock";
 import { Toggle, ToggleSummary, ToggleContent } from "./Toggle";
 import { Columns, Column } from "./Columns";
 import "tippy.js/dist/tippy.css";
@@ -1281,6 +1282,7 @@ export function TiptapEditor({
       VideoTimestamp,
       EmbedVideo,
       Callout,
+      DataviewBlock,
       Toggle,
       ToggleSummary,
       ToggleContent,

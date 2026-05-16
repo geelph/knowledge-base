@@ -858,6 +858,37 @@ export interface CreateProjectInput {
   endDate?: string | null;
 }
 
+// ─── Dataview 块（v1.12） ──────────────────────────
+
+/** Dataview 块内存储的配置（在 content 里以 JSON 形式编码到 data-dataview 属性） */
+export type DataviewKind =
+  | "recent-notes"
+  | "notes-by-tag"
+  | "notes-by-folder"
+  | "pending-tasks"
+  | "tasks-by-project";
+
+export interface DataviewConfig {
+  kind: DataviewKind;
+  /** 各模板自己用：tag / folderId / projectId */
+  tag?: string;
+  folderId?: number;
+  projectId?: number;
+  limit?: number;
+  /** 可选自定义标题；不填则按 kind 显示默认标题 */
+  title?: string;
+}
+
+/** 后端 DataviewRow 的前端表示（驼峰对齐 #[serde(rename_all = "camelCase")]） */
+export interface DataviewRow {
+  title: string;
+  subtitle: string | null;
+  linkKind: "note" | "task";
+  linkId: number;
+  updatedAt: string;
+  extra?: unknown;
+}
+
 export interface UpdateProjectInput {
   name?: string;
   description?: string;
