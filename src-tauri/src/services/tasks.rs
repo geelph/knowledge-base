@@ -66,6 +66,22 @@ impl TaskService {
         db.toggle_task_status(id)
     }
 
+    /// 设置任务的看板列归属（'todo' / 'doing' / 'done'）。
+    /// 校验 stage 合法性后委托给 DAO 层做实际 SQL（DAO 会同步 status / completed_at）。
+    pub fn set_kanban_stage(
+        db: &Database,
+        id: i64,
+        stage: &str,
+    ) -> Result<(), AppError> {
+        match stage {
+            "todo" | "doing" | "done" => db.set_task_kanban_stage(id, stage),
+            other => Err(AppError::InvalidInput(format!(
+                "非法的看板阶段：{}（仅支持 todo/doing/done）",
+                other
+            ))),
+        }
+    }
+
     pub fn delete(db: &Database, id: i64) -> Result<bool, AppError> {
         db.delete_task(id)
     }

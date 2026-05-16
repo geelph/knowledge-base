@@ -58,6 +58,18 @@ pub fn toggle_task_status(state: State<'_, AppState>, id: i64) -> Result<i32, St
     Ok(v)
 }
 
+/// 设置任务在看板上的列归属（todo / doing / done）。拖到 done 列时同步标记完成。
+#[tauri::command]
+pub fn set_task_kanban_stage(
+    state: State<'_, AppState>,
+    id: i64,
+    stage: String,
+) -> Result<(), String> {
+    TaskService::set_kanban_stage(&state.db, id, &stage).map_err(|e| e.to_string())?;
+    notify_reminder(&state);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn delete_task(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
     let ok = TaskService::delete(&state.db, id).map_err(|e| e.to_string())?;

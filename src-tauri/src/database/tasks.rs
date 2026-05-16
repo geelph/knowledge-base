@@ -53,7 +53,7 @@ impl super::Database {
                     t.completed_at, t.created_at, t.updated_at, t.remind_before_minutes, t.reminded_at,
                     t.repeat_kind, t.repeat_interval, t.repeat_weekdays, t.repeat_until,
                     t.repeat_count, t.repeat_done_count, t.source_batch_id, t.category_id,
-                    t.parent_task_id,
+                    t.parent_task_id, t.kanban_stage, t.project_id, t.start_date,
                     COALESCE(s.done, 0)  AS subtask_done,
                     COALESCE(s.total, 0) AS subtask_total
              FROM tasks t
@@ -99,8 +99,11 @@ impl super::Database {
                     source_batch_id: row.get(18)?,
                     category_id: row.get(19)?,
                     parent_task_id: row.get(20)?,
-                    subtask_done: row.get(21)?,
-                    subtask_total: row.get(22)?,
+                    kanban_stage: row.get(21)?,
+                    project_id: row.get(22)?,
+                    start_date: row.get(23)?,
+                    subtask_done: row.get(24)?,
+                    subtask_total: row.get(25)?,
                     links: Vec::new(),
                 })
             })?
@@ -155,7 +158,7 @@ impl super::Database {
                         t.completed_at, t.created_at, t.updated_at, t.remind_before_minutes, t.reminded_at,
                         t.repeat_kind, t.repeat_interval, t.repeat_weekdays, t.repeat_until,
                         t.repeat_count, t.repeat_done_count, t.source_batch_id, t.category_id,
-                        t.parent_task_id,
+                        t.parent_task_id, t.kanban_stage, t.project_id, t.start_date,
                         COALESCE((SELECT SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END)
                                   FROM tasks WHERE parent_task_id = t.id), 0) AS subtask_done,
                         COALESCE((SELECT COUNT(*) FROM tasks WHERE parent_task_id = t.id), 0) AS subtask_total
@@ -184,8 +187,11 @@ impl super::Database {
                         source_batch_id: row.get(18)?,
                         category_id: row.get(19)?,
                         parent_task_id: row.get(20)?,
-                        subtask_done: row.get(21)?,
-                        subtask_total: row.get(22)?,
+                        kanban_stage: row.get(21)?,
+                        project_id: row.get(22)?,
+                        start_date: row.get(23)?,
+                        subtask_done: row.get(24)?,
+                        subtask_total: row.get(25)?,
                         links: Vec::new(),
                     })
                 },
@@ -231,7 +237,7 @@ impl super::Database {
                     completed_at, created_at, updated_at, remind_before_minutes, reminded_at,
                     repeat_kind, repeat_interval, repeat_weekdays, repeat_until,
                     repeat_count, repeat_done_count, source_batch_id, category_id,
-                    parent_task_id
+                    parent_task_id, kanban_stage, project_id, start_date
              FROM tasks WHERE parent_task_id = ?1
              ORDER BY status ASC, created_at ASC, id ASC",
         )?;
@@ -259,6 +265,9 @@ impl super::Database {
                     source_batch_id: row.get(18)?,
                     category_id: row.get(19)?,
                     parent_task_id: row.get(20)?,
+                    kanban_stage: row.get(21)?,
+                    project_id: row.get(22)?,
+                    start_date: row.get(23)?,
                     subtask_done: 0,
                     subtask_total: 0,
                     links: Vec::new(),
@@ -447,6 +456,20 @@ impl super::Database {
             sets.push("category_id = ?");
             binds.push(Box::new(cid));
         }
+        // ─── 项目（v41） ─────────────────────────────
+        if input.clear_project_id.unwrap_or(false) {
+            sets.push("project_id = NULL");
+        } else if let Some(pid) = input.project_id {
+            sets.push("project_id = ?");
+            binds.push(Box::new(pid));
+        }
+        // ─── 甘特图开始日期（v41） ────────────────────
+        if input.clear_start_date.unwrap_or(false) {
+            sets.push("start_date = NULL");
+        } else if let Some(sd) = input.start_date {
+            sets.push("start_date = ?");
+            binds.push(Box::new(sd));
+        }
         if sets.is_empty() {
             return Ok(false);
         }
@@ -503,6 +526,10 @@ impl super::Database {
     }
 
     /// 切换完成状态：返回新状态（0/1）
+    ///
+    /// 与 kanban_stage 双向同步：
+    /// - 切到 status=1：kanban_stage → 'done'
+    /// - 切到 status=0：若当前 stage='done' 则回 'todo'；否则保持（用户可能特意停在 'doing'）
     pub fn toggle_task_status(&self, id: i64) -> Result<i32, AppError> {
         let conn = self
             .conn
@@ -517,17 +544,66 @@ impl super::Database {
         if next == 1 {
             conn.execute(
                 "UPDATE tasks SET status = 1, completed_at = datetime('now','localtime'),
+                                    kanban_stage = 'done',
                                     updated_at = datetime('now','localtime') WHERE id = ?1",
                 params![id],
             )?;
         } else {
+            // 仅当当前 stage='done' 才回 'todo'；用户已经手动放在 'doing' 列时尊重选择
             conn.execute(
-                "UPDATE tasks SET status = 0, completed_at = NULL,
-                                    updated_at = datetime('now','localtime') WHERE id = ?1",
+                "UPDATE tasks
+                 SET status = 0,
+                     completed_at = NULL,
+                     kanban_stage = CASE WHEN kanban_stage = 'done' THEN 'todo' ELSE kanban_stage END,
+                     updated_at = datetime('now','localtime')
+                 WHERE id = ?1",
                 params![id],
             )?;
         }
         Ok(next)
+    }
+
+    /// 设置任务的看板阶段（'todo' / 'doing' / 'done'）；同步 status / completed_at。
+    ///
+    /// - stage='done'  → status=1 + completed_at=now
+    /// - stage='todo'  → status=0 + completed_at=NULL
+    /// - stage='doing' → status=0 + completed_at=NULL（"进行中"语义视为未完成）
+    ///
+    /// 调用方负责校验 stage 取值，DAO 不重复校验。
+    pub fn set_task_kanban_stage(
+        &self,
+        id: i64,
+        stage: &str,
+    ) -> Result<(), AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::Custom(e.to_string()))?;
+        let affected = if stage == "done" {
+            conn.execute(
+                "UPDATE tasks
+                 SET kanban_stage = 'done',
+                     status = 1,
+                     completed_at = datetime('now','localtime'),
+                     updated_at = datetime('now','localtime')
+                 WHERE id = ?1",
+                params![id],
+            )?
+        } else {
+            conn.execute(
+                "UPDATE tasks
+                 SET kanban_stage = ?1,
+                     status = 0,
+                     completed_at = NULL,
+                     updated_at = datetime('now','localtime')
+                 WHERE id = ?2",
+                params![stage, id],
+            )?
+        };
+        if affected == 0 {
+            return Err(AppError::NotFound(format!("任务 {} 不存在", id)));
+        }
+        Ok(())
     }
 
     pub fn delete_task(&self, id: i64) -> Result<bool, AppError> {
@@ -662,6 +738,10 @@ impl super::Database {
                     source_batch_id: row.get(18)?,
                     category_id: row.get(19)?,
                     parent_task_id: row.get(20)?,
+                    // 提醒扫描内部不关心 kanban_stage / project_id / start_date，用默认值占位
+                    kanban_stage: "todo".to_string(),
+                    project_id: None,
+                    start_date: None,
                     subtask_done: 0,
                     subtask_total: 0,
                     links: Vec::new(),
