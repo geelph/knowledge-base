@@ -10,7 +10,7 @@ import {
   message,
   theme as antdTheme,
 } from "antd";
-import Markdown from "react-markdown";
+import { MarkdownContent as Markdown } from "@/components/ai/MarkdownContent";
 import {
   Sparkles,
   RefreshCcw,

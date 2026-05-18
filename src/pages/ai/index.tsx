@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import Markdown from "react-markdown";
+import { MarkdownContent as Markdown } from "@/components/ai/MarkdownContent";
 import {
   Button,
   Input,

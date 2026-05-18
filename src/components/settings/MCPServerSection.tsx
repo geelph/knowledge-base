@@ -30,7 +30,7 @@ import {
 import { ExternalLink, Folder, Trash2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import Markdown from "react-markdown";
+import { MarkdownContent as Markdown } from "@/components/ai/MarkdownContent";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { systemApi } from "@/lib/api";

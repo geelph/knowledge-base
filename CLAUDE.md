@@ -260,6 +260,8 @@ claude --worktree feature-x
 
 ## 🔴 绝对禁止的写法
 
+> ⚠️ Shell：别 `cd <子目录> && <命令>`——Bash 会话 cwd 持久，会让 Claude Code statusline 项目名飘到子目录。用 `cargo --manifest-path` / `git -C` / `pnpm --dir` / `npm --prefix`。
+
 ### Rust 后端
 
 | 错误做法 | 正确做法 | 原因 |
@@ -553,13 +555,13 @@ pnpm build
 npx tsc --noEmit
 
 # Rust 代码检查
-cd src-tauri && cargo clippy
+cargo clippy --manifest-path src-tauri/Cargo.toml
 
 # Rust 编译检查
-cd src-tauri && cargo check
+cargo check --manifest-path src-tauri/Cargo.toml
 
 # Rust 测试
-cd src-tauri && cargo test
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 ### 开发服务器

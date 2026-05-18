@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Drawer, Button, Input, message, Tooltip, Empty, theme as antdTheme } from "antd";
-import Markdown from "react-markdown";
+import { MarkdownContent as Markdown } from "@/components/ai/MarkdownContent";
 import { Send, StopCircle, ExternalLink, Bot, RefreshCw, Quote, X } from "lucide-react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { aiChatApi } from "@/lib/api";
