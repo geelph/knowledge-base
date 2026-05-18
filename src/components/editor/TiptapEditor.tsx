@@ -1722,13 +1722,23 @@ export function TiptapEditor({
   // ─── 查找替换浮条状态（Ctrl+F / Ctrl+H 触发） ───
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchShowReplace, setSearchShowReplace] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
-  // 在编辑器 DOM 上挂 keydown：编辑器有焦点时拦截 Ctrl+F / Ctrl+H 唤起浮条。
+  // 在 window 上挂 keydown：编辑器一旦 mount 就能响应 Ctrl+F / Ctrl+H，
+  // 不再要求光标先点进正文（修复"打开笔记后必须先点文档才能搜索"的体验问题）。
+  // 多 TiptapEditor 同时挂载的场景（如设置弹窗的模板编辑器）：
+  //   - 用 offsetParent 过滤掉隐藏/未挂入 DOM 的 wrapper
+  //   - 若事件焦点在「另一个 tiptap-wrapper」内，让它自己处理，不抢
   // 浮条 input 自己处理 Esc / Enter / Shift+Enter，无需在这里再加。
   useEffect(() => {
     if (!editor) return;
-    const dom = editor.view.dom as HTMLElement;
     const onKeyDown = (e: KeyboardEvent) => {
+      const wrap = wrapperRef.current;
+      if (!wrap || wrap.offsetParent === null) return;
+      const target = e.target as HTMLElement | null;
+      const otherWrap = target?.closest(".tiptap-wrapper");
+      if (otherWrap && otherWrap !== wrap) return;
+
       if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
         e.preventDefault();
         e.stopPropagation();
@@ -1741,8 +1751,8 @@ export function TiptapEditor({
         setSearchOpen(true);
       }
     };
-    dom.addEventListener("keydown", onKeyDown);
-    return () => dom.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, [editor]);
 
   // 编辑器统计信息：打字时不实时算，停顿 300ms 后再遍历整篇。
@@ -1789,11 +1799,19 @@ export function TiptapEditor({
   if (!editor) return null;
 
   return (
-    <div className="tiptap-wrapper" style={{ position: "relative" }}>
+    <div ref={wrapperRef} className="tiptap-wrapper" style={{ position: "relative" }}>
       {/* 阅读模式下隐藏工具栏与 AI 划词条；selection / 复制 / 滚动均正常 */}
       {!readingMode && (
         <>
-          <EditorToolbar editor={editor} noteId={noteId} ensureNoteId={ensureNoteId} />
+          <EditorToolbar
+            editor={editor}
+            noteId={noteId}
+            ensureNoteId={ensureNoteId}
+            onOpenSearch={() => {
+              setSearchShowReplace(false);
+              setSearchOpen(true);
+            }}
+          />
           {/* 「问 AI 这段」与续写/总结/改写等：钉在 EditorToolbar 正下方的次级 sticky bar。
               位置完全静态，跟豆包/划词翻译这类系统级浮窗物理错开（它们贴选区，咱贴顶部）。
               选区状态控制可见性，无选区时 max-height:0 折叠，有选区时滑下来。 */}

@@ -43,6 +43,7 @@ import {
   Columns4,
   Trash2,
   ChevronDown,
+  Search,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toKbAsset } from "@/lib/assetUrl";
@@ -61,6 +62,8 @@ interface ToolbarProps {
   noteId?: number;
   /** 与 TiptapEditor 的同名 prop 含义一致：noteId 缺失时用它按需建档 */
   ensureNoteId?: () => Promise<number>;
+  /** 唤起编辑器内查找替换浮条；缺省则不渲染搜索按钮（用于不需要搜索的嵌入场景，如设置弹窗的模板编辑器） */
+  onOpenSearch?: () => void;
 }
 
 interface ToolItem {
@@ -75,7 +78,7 @@ interface ToolItem {
   customRender?: () => React.ReactNode;
 }
 
-export function EditorToolbar({ editor, noteId, ensureNoteId }: ToolbarProps) {
+export function EditorToolbar({ editor, noteId, ensureNoteId, onOpenSearch }: ToolbarProps) {
   const formatPainter = useFormatPainter(editor);
   // 订阅 editor 的 selection / transaction 事件，让 toolbar 跟随光标位置刷新：
   // 段落格式下拉的 label（getCurrentBlockType）和按钮 active 高亮（isActive）
@@ -1013,6 +1016,15 @@ export function EditorToolbar({ editor, noteId, ensureNoteId }: ToolbarProps) {
         action: () =>
           editor.chain().focus().unsetAllMarks().clearNodes().run(),
       },
+      ...(onOpenSearch
+        ? [
+            {
+              icon: <Search size={15} />,
+              title: "查找替换 (Ctrl+F / Ctrl+H)",
+              action: onOpenSearch,
+            } satisfies ToolItem,
+          ]
+        : []),
     ],
   ];
 
