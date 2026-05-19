@@ -357,7 +357,7 @@ export default function GraphPage() {
             className="inline-block w-2.5 h-2.5 rounded-full"
             style={{ background: token.colorWarning }}
           />
-          每日笔记
+          日记
         </span>
         <span className="flex items-center gap-1">
           <span

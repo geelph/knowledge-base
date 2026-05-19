@@ -15,7 +15,7 @@ pub fn setup_tray(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 快捷操作
     let new_note = MenuItem::with_id(app, "new-note", "新建笔记", true, Some("Ctrl+N"))?;
-    let open_daily = MenuItem::with_id(app, "open-daily", "打开今日每日笔记", true, None::<&str>)?;
+    let open_daily = MenuItem::with_id(app, "open-daily", "打开今日日记", true, None::<&str>)?;
     let open_search = MenuItem::with_id(app, "open-search", "全局搜索", true, Some("Ctrl+K"))?;
     let sep1 = PredefinedMenuItem::separator(app)?;
 

@@ -29,7 +29,7 @@ interface ModuleMeta {
 const MODULES: ModuleMeta[] = [
   {
     view: "daily",
-    label: "每日笔记",
+    label: "日记",
     desc: "按日期写日记 / 工作日志，自带月历与日期跳转",
     icon: <Calendar size={16} />,
   },

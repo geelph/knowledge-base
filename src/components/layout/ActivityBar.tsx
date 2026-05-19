@@ -61,7 +61,7 @@ const MAIN_GROUPS: ActivityItem[][] = [
   // 创作 / 工作流
   [
     { view: "notes", route: "/notes", label: "笔记", icon: <NotebookText size={20} />, core: true },
-    { view: "daily", route: "/daily", label: "每日笔记", icon: <Calendar size={20} /> },
+    { view: "daily", route: "/daily", label: "日记", icon: <Calendar size={20} /> },
     { view: "tasks", route: "/tasks", label: "待办", icon: <CheckSquare size={20} /> },
     { view: "cards", route: "/cards", label: "卡片复习", icon: <Layers size={20} /> },
   ],

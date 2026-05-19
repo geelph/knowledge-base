@@ -115,7 +115,7 @@ impl ExportService {
         {
             // 构建子目录路径
             let sub_dir = if *is_daily {
-                "每日笔记".to_string()
+                "日记".to_string()
             } else if let Some(fid) = note_folder_id {
                 build_folder_path(*fid, &folder_names, &folder_parents)
             } else {

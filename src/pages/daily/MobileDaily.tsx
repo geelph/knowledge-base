@@ -153,7 +153,7 @@ export function MobileDaily() {
         >
           <ChevronLeft size={24} className="text-slate-700" />
         </button>
-        <h1 className="text-base font-semibold text-slate-900">每日笔记</h1>
+        <h1 className="text-base font-semibold text-slate-900">日记</h1>
         <button
           aria-label="设置"
           className="flex h-10 w-10 items-center justify-center"

@@ -289,7 +289,7 @@ function DesktopDailyPage() {
       <div className="editor-topbar">
         <Space align="center">
           <Calendar size={18} />
-          <span style={{ fontWeight: 600, fontSize: 15 }}>每日笔记</span>
+          <span style={{ fontWeight: 600, fontSize: 15 }}>日记</span>
           <Divider
             type="vertical"
             style={{ height: 18, margin: "0 8px" }}

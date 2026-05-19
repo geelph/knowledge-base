@@ -199,7 +199,7 @@ export function DailyPanel() {
       >
         <Calendar size={15} style={{ color: token.colorPrimary }} />
         <span style={{ fontSize: 13, fontWeight: 600, color: token.colorText }}>
-          每日笔记
+          日记
         </span>
         <div style={{ flex: 1 }} />
         <Button

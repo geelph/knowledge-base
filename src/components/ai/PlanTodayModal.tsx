@@ -284,7 +284,7 @@ export function PlanTodayModal({ open, onClose, onSaved }: PlanTodayModalProps) 
               lineHeight: 1.7,
             }}
           >
-            AI 会参考：昨天/今天的每日笔记、未完成任务、已有待办，给出 3~7 条建议；
+            AI 会参考：昨天/今天的日记、未完成任务、已有待办，给出 3~7 条建议；
             建议不会直接写入，你勾选确认后才会保存。
             <br />
             <strong>仅 OpenAI / DeepSeek / 智谱 / Claude 兼容模型可用；Ollama 暂不支持。</strong>

@@ -91,7 +91,7 @@ const CORE_MODULES = [
 const OPTIONS: OptionMeta[] = [
   {
     view: "daily",
-    label: "每日笔记",
+    label: "日记",
     desc: "按日期写日记 / 工作日志",
     icon: <Calendar size={16} className="text-green-600" />,
     iconBg: "bg-green-100",
