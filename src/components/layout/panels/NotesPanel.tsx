@@ -1641,6 +1641,44 @@ export function NotesPanel() {
     return folderTree;
   }, [folders, creatingUnderKey, notesByFolder, tabTitleByNoteId, uncategorizedNotes, uncategorizedLoaded, showOnlyFolders]);
 
+  // Q-004：节点超阈值时启用 antd Tree 的 virtual scroll，避免几千条笔记全量挂载导致拖拽 / 展开卡顿。
+  // 只数"当前展开后会渲染"的节点：折叠的 children 不算（antd 内部也只渲染展开的）。
+  const VIRTUAL_THRESHOLD = 200;
+  const visibleNodeCount = useMemo(() => {
+    function count(nodes: EnrichedNode[]): number {
+      let n = 0;
+      for (const node of nodes) {
+        n += 1;
+        const key = String(node.key);
+        const isExpanded = expandedKeys.includes(key);
+        if (isExpanded && node.children && node.children.length > 0) {
+          n += count(node.children as EnrichedNode[]);
+        }
+      }
+      return n;
+    }
+    return count(treeData as EnrichedNode[]);
+  }, [treeData, expandedKeys]);
+  const treeContainerRef = useRef<HTMLDivElement>(null);
+  const [treeHeight, setTreeHeight] = useState(0);
+  // 只在节点超阈值时才启用 virtual：少量节点下 virtual 模式自带的微滚动抖动反而是负优化
+  const enableVirtual = visibleNodeCount > VIRTUAL_THRESHOLD;
+  useEffect(() => {
+    if (!enableVirtual) return;
+    const el = treeContainerRef.current;
+    if (!el) return;
+    // 初次测一下（ResizeObserver 首次回调一定在 layout 后，先用 clientHeight 兜底避免首帧白）
+    setTreeHeight(el.clientHeight);
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // contentRect.height 排除了 padding；与 Tree 实际可用区域一致
+        setTreeHeight(entry.contentRect.height);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [enableVirtual]);
+
   return (
     <div
       className="flex flex-col h-full"
@@ -1718,9 +1756,11 @@ export function NotesPanel() {
         />
       </div>
 
-      {/* 文件夹小节 —— 兼任 OS 文件拖入区（.md/.txt → 新建笔记） */}
+      {/* 文件夹小节 —— 兼任 OS 文件拖入区（.md/.txt → 新建笔记）
+          Q-004：启用 virtual scroll 时本层必须 overflow-hidden + flex-col，让 Tree 占满剩余空间且自己接管滚动；
+          节点数少时退化回 overflow-auto，保持旧体验 */}
       <div
-        className="flex-1 overflow-auto"
+        className={enableVirtual ? "flex-1 overflow-hidden flex flex-col" : "flex-1 overflow-auto"}
         style={{
           minHeight: 0,
           paddingTop: 4,
@@ -1769,7 +1809,7 @@ export function NotesPanel() {
         }}
       >
         <div
-          className="flex items-center justify-between cursor-pointer select-none"
+          className="flex items-center justify-between cursor-pointer select-none shrink-0"
           style={{
             color: token.colorTextSecondary,
             fontSize: 12,
@@ -1798,6 +1838,9 @@ export function NotesPanel() {
 
         {folderExpanded && (
           <div
+            ref={treeContainerRef}
+            // Q-004：virtual 模式下让本层 flex-1 + 自己 overflow-hidden，Tree 才能拿到稳定可测的高度（外层不滚 → 内层撑满）
+            className={enableVirtual ? "flex-1 min-h-0 overflow-hidden" : undefined}
             style={{ padding: "0 12px" }}
             tabIndex={0}
             onKeyDown={handleTreeKeyDown}
@@ -1844,6 +1887,10 @@ export function NotesPanel() {
                 className="sidebar-folder-tree"
                 treeData={treeData}
                 blockNode
+                // Q-004：节点 > 阈值 + 容器已测得高度 → 启用 antd Tree 的 virtual scroll（默认 itemHeight=28）
+                {...(enableVirtual && treeHeight > 0
+                  ? { virtual: true, height: treeHeight }
+                  : {})}
                 draggable={{
                   icon: false,
                   // 编辑态（重命名/新建子文件夹）的节点禁拖：在 input 里拖选文本
