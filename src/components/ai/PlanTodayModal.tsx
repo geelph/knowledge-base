@@ -287,7 +287,7 @@ export function PlanTodayModal({ open, onClose, onSaved }: PlanTodayModalProps) 
             AI 会参考：昨天/今天的日记、未完成任务、已有待办，给出 3~7 条建议；
             建议不会直接写入，你勾选确认后才会保存。
             <br />
-            <strong>仅 OpenAI / DeepSeek / 智谱 / Claude 兼容模型可用；Ollama 暂不支持。</strong>
+            <strong>支持 OpenAI / DeepSeek / 智谱 / Claude 兼容模型，以及本地 Ollama（建议用支持指令跟随的模型，如 qwen2.5 / llama3.1）。</strong>
           </div>
           <div className="flex justify-end gap-2 mt-2">
             <Button onClick={handleClose}>取消</Button>

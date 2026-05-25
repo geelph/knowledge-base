@@ -244,7 +244,7 @@ export function DraftNoteModal({ open, onClose, onSaved }: DraftNoteModalProps) 
           >
             AI 会参考你的目录结构建议归档路径；不会读取笔记正文内容，不上传云端。
             <br />
-            <strong>仅 OpenAI / DeepSeek / 智谱 / Claude 兼容模型可用；Ollama 暂不支持。</strong>
+            <strong>支持 OpenAI / DeepSeek / 智谱 / Claude 兼容模型，以及本地 Ollama（建议用支持指令跟随的模型，如 qwen2.5 / llama3.1）。</strong>
           </div>
 
           <div className="flex justify-end gap-2 mt-2">

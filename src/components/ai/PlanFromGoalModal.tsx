@@ -544,7 +544,7 @@ export function PlanFromGoalModal({ open, onClose, onSaved }: Props) {
             AI 用艾森豪威尔四象限法则拆出 10~30 条可执行待办 + 2~6 个阶段里程碑。
             <br />
             <strong>
-              仅 OpenAI / DeepSeek / 智谱 / Claude 兼容模型可用；Ollama 不支持。
+              支持 OpenAI / DeepSeek / 智谱 / Claude 兼容模型，以及本地 Ollama（建议用支持指令跟随的模型，如 qwen2.5 / llama3.1）。
             </strong>
             生成后所有待办默认勾选，可逐条编辑或取消。
           </div>

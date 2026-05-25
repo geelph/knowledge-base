@@ -1799,13 +1799,28 @@ impl AiService {
             emit_ai_token(app, conversation_id, &reasoning_content);
         }
 
-        // P0: finish_reason 异常处理。length / content_filter 视为错误抛出，
-        // 让前端 ai:error 监听器提示用户；stop / tool_calls / null 都是正常结束
+        // finish_reason 异常处理：
+        // - length：模型生成达 max_tokens 上限，**已有部分内容**，不当致命错误。
+        //   追加一行提示让用户知道被截断，返回 Ok 保留已渲染的内容（前面 emit_ai_token
+        //   已经流式发过）；用户可视情况调大 max_tokens 或缩短上下文重试。
+        // - content_filter / 其他非 stop|tool_calls：当致命错误抛出（红色 toast）。
         if let Some(reason) = &finish_reason {
-            if reason != "stop" && reason != "tool_calls" {
-                let msg = format!("AI 异常终止 (finish_reason={})", reason);
-                emit_ai_error(app, conversation_id, &msg);
-                return (Err(AppError::Custom(msg)), None);
+            match reason.as_str() {
+                "stop" | "tool_calls" => {}
+                "length" => {
+                    let tip = "\n\n> ⚠️ 输出达到模型上限被截断。可在模型设置里调大 max_tokens 或缩短上下文后重试。";
+                    content.push_str(tip);
+                    emit_ai_token(app, conversation_id, tip);
+                    log::warn!(
+                        "[ai] conversation {} 输出截断 (finish_reason=length)",
+                        conversation_id
+                    );
+                }
+                _ => {
+                    let msg = format!("AI 异常终止 (finish_reason={})", reason);
+                    emit_ai_error(app, conversation_id, &msg);
+                    return (Err(AppError::Custom(msg)), None);
+                }
             }
         }
 
@@ -2116,13 +2131,8 @@ impl AiService {
         req: PlanTodayRequest,
     ) -> Result<PlanTodayResponse, AppError> {
         let model = db.get_default_ai_model()?;
-        // T-012: 仅 Ollama 不支持（本地 generate API 不返回 JSON 模式）；其他都按 OpenAI 兼容
-        if model.provider == "ollama" {
-            return Err(AppError::Custom(
-                "AI 规划功能暂不支持 Ollama 协议，请切换到 OpenAI 兼容模型（含本地 LM Studio）。"
-                    .into(),
-            ));
-        }
+        // Ollama 自 v0.1.24 起原生支持 OpenAI 兼容的 /v1/chat/completions 端点，
+        // 此处一律走 build_openai_chat_url 即可；response_format 在下方按 provider 决定是否带。
 
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let yesterday = (chrono::Local::now() - chrono::Duration::days(1))
@@ -2274,8 +2284,9 @@ impl AiService {
             "response_format": { "type": "json_object" },
             "max_tokens": 2000,
         });
-        // Claude 兼容代理有些不支持 response_format，去掉该字段以防报错
-        if model.provider == "claude" {
+        // Claude 兼容代理 / Ollama OpenAI 兼容层都对 response_format 支持不一致，
+        // 去掉该字段，完全靠 prompt 让模型输出 JSON（下方解析器已带剥 ``` 兜底）
+        if model.provider == "claude" || model.provider == "ollama" {
             req_body
                 .as_object_mut()
                 .and_then(|m| m.remove("response_format"));
@@ -2335,11 +2346,7 @@ impl AiService {
         }
 
         let model = db.get_default_ai_model()?;
-        if model.provider == "ollama" {
-            return Err(AppError::Custom(
-                "智能解析暂不支持 Ollama 协议，请切换到 OpenAI 兼容模型。".into(),
-            ));
-        }
+        // Ollama 走 OpenAI 兼容端点（/v1/chat/completions），见 build_openai_chat_url
 
         let now = chrono::Local::now();
         let today = now.format("%Y-%m-%d").to_string();
@@ -2391,7 +2398,9 @@ impl AiService {
             "response_format": { "type": "json_object" },
             "max_tokens": 600,
         });
-        if model.provider == "claude" {
+        // Claude 兼容代理 / Ollama OpenAI 兼容层都对 response_format 支持不一致，
+        // 去掉该字段，完全靠 prompt 让模型输出 JSON（下方解析器已带剥 ``` 兜底）
+        if model.provider == "claude" || model.provider == "ollama" {
             req_body
                 .as_object_mut()
                 .and_then(|m| m.remove("response_format"));
@@ -2444,7 +2453,7 @@ impl AiService {
     ///
     /// 设计要点：
     /// 1. 只把**目录路径字符串**喂给 AI，不喂笔记内容 → 避免大 prompt + 信息泄露
-    /// 2. 非流式 + `response_format: json_object`（Claude 兼容代理会自动去掉该字段）
+    /// 2. 非流式 + `response_format: json_object`（Claude/Ollama 会自动去掉该字段，靠 prompt 引导 JSON）
     /// 3. 两轮兜底解析（原始 / 剥 markdown ``` ）
     ///
     /// 调用方不在这里写库；save 逻辑由前端 `folderApi` + `noteApi` 在 Modal 确认时触发。
@@ -2458,13 +2467,7 @@ impl AiService {
         }
 
         let model = db.get_default_ai_model()?;
-        // T-012: 仅 Ollama 不支持（无 JSON 模式）；其他都按 OpenAI 兼容协议
-        if model.provider == "ollama" {
-            return Err(AppError::Custom(
-                "AI 写笔记暂不支持 Ollama 协议，请切换到 OpenAI 兼容模型（含本地 LM Studio）。"
-                    .into(),
-            ));
-        }
+        // Ollama 走 OpenAI 兼容端点（/v1/chat/completions）
 
         // 扁平化现有目录树为 "父/子/孙" 路径列表，供 AI 参考选择归档
         let tree = db.list_folders_tree()?;
@@ -2527,7 +2530,9 @@ impl AiService {
             "stream": false,
             "response_format": { "type": "json_object" },
         });
-        if model.provider == "claude" {
+        // Claude 兼容代理 / Ollama OpenAI 兼容层都对 response_format 支持不一致，
+        // 去掉该字段，完全靠 prompt 让模型输出 JSON（下方解析器已带剥 ``` 兜底）
+        if model.provider == "claude" || model.provider == "ollama" {
             req_body
                 .as_object_mut()
                 .and_then(|m| m.remove("response_format"));
@@ -2597,12 +2602,7 @@ impl AiService {
         let horizon = req.horizon_days.clamp(1, 365);
 
         let model = db.get_default_ai_model()?;
-        if model.provider == "ollama" {
-            return Err(AppError::Custom(
-                "AI 智能规划暂不支持 Ollama 协议，请切换到 OpenAI 兼容模型（含本地 LM Studio）。"
-                    .into(),
-            ));
-        }
+        // Ollama 走 OpenAI 兼容端点
 
         // 起始日期：用户传入或默认今天
         let start_date = req
@@ -2686,7 +2686,9 @@ impl AiService {
             "response_format": { "type": "json_object" },
             "max_tokens": 4000,
         });
-        if model.provider == "claude" {
+        // Claude 兼容代理 / Ollama OpenAI 兼容层都对 response_format 支持不一致，
+        // 去掉该字段，完全靠 prompt 让模型输出 JSON（下方解析器已带剥 ``` 兜底）
+        if model.provider == "claude" || model.provider == "ollama" {
             req_body
                 .as_object_mut()
                 .and_then(|m| m.remove("response_format"));
@@ -2776,12 +2778,7 @@ impl AiService {
             .to_string();
 
         let model = db.get_default_ai_model()?;
-        if model.provider == "ollama" {
-            return Err(AppError::Custom(
-                "AI 智能规划暂不支持 Ollama 协议，请切换到 OpenAI 兼容模型（含本地 LM Studio）。"
-                    .into(),
-            ));
-        }
+        // Ollama 走 OpenAI 兼容端点
 
         // 解析 Excel → 多 Sheet 快照 + markdown 全文
         let summary = crate::services::excel_parser::read_workbook(file_path)?;
@@ -2873,7 +2870,9 @@ impl AiService {
             "response_format": { "type": "json_object" },
             "max_tokens": 6000,
         });
-        if model.provider == "claude" {
+        // Claude 兼容代理 / Ollama OpenAI 兼容层都对 response_format 支持不一致，
+        // 去掉该字段，完全靠 prompt 让模型输出 JSON（下方解析器已带剥 ``` 兜底）
+        if model.provider == "claude" || model.provider == "ollama" {
             req_body
                 .as_object_mut()
                 .and_then(|m| m.remove("response_format"));
