@@ -22,9 +22,10 @@ impl NoteService {
     ) -> Result<Vec<NoteImageRef>, AppError> {
         let mut out = Vec::new();
         for &id in note_ids {
+            // get_note 返回 Result<Option<Note>>：查不到（None）或出错都静默跳过
             let note = match db.get_note(id) {
-                Ok(n) => n,
-                Err(_) => continue,
+                Ok(Some(n)) => n,
+                _ => continue,
             };
             let images: Vec<String> = extract_local_refs(&note.content)
                 .into_iter()
