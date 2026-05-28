@@ -15,6 +15,13 @@ pub fn setup_tray(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 快捷操作
     let new_note = MenuItem::with_id(app, "new-note", "新建笔记", true, Some("Ctrl+N"))?;
+    let quick_add = MenuItem::with_id(
+        app,
+        "quick-add",
+        "快速记一笔",
+        true,
+        Some("Ctrl+Alt+Space"),
+    )?;
     let open_daily = MenuItem::with_id(app, "open-daily", "打开今日日记", true, None::<&str>)?;
     let open_search = MenuItem::with_id(app, "open-search", "全局搜索", true, Some("Ctrl+K"))?;
     let sep1 = PredefinedMenuItem::separator(app)?;
@@ -48,6 +55,7 @@ pub fn setup_tray(
         app,
         &[
             &new_note,
+            &quick_add,
             &open_daily,
             &open_search,
             &sep1,
@@ -99,6 +107,10 @@ pub fn setup_tray(
             "new-note" => {
                 bring_main_to_front(app);
                 let _ = app.emit("tray:new-note", ());
+            }
+            "quick-add" => {
+                // 快速记一笔悬浮窗：不前置主窗，直接弹独立小窗（应用在后台也能记）
+                let _ = crate::services::popout_window::open_quick_add(app);
             }
             "open-daily" => {
                 bring_main_to_front(app);

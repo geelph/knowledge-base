@@ -21,6 +21,7 @@ import PromptsPage from "@/pages/prompts";
 import HiddenPage from "@/pages/hidden";
 import QuickCreatePage from "@/pages/quick-create";
 import QuickCapturePage from "@/pages/quick-capture";
+import QuickAddPage from "@/pages/quick-add";
 import FeatureTogglePage from "@/pages/feature-toggle";
 import MigrationSplash from "@/pages/migration-splash";
 import EmergencyReminderPage from "@/pages/emergency-reminder";
@@ -59,6 +60,12 @@ const router = createHashRouter([
   {
     path: "/quick-capture",
     element: <QuickCapturePage />,
+    errorElement: <RouteErrorFallback />,
+  },
+  // 快速记一笔：独立悬浮窗（quick-add 窗口，全局快捷键唤起），不挂 AppLayout
+  {
+    path: "/quick-add",
+    element: <QuickAddPage />,
     errorElement: <RouteErrorFallback />,
   },
   // 任务详情：沉浸式全屏，独立路由

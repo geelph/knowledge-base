@@ -100,3 +100,55 @@ pub fn open_mindmap(app: &AppHandle, note_id: i64) -> Result<(), AppError> {
 
     Ok(())
 }
+
+/// 「快速记一笔」独立悬浮窗（滴答清单式）。toggle 语义：
+/// - 窗口不存在 → 创建（无边框 / 置顶 / 不进任务栏 / 居中小窗），加载 `#/quick-add`
+/// - 已存在且可见 → 收起（hide，不销毁，下次秒开）
+/// - 已存在但隐藏 → 前置并聚焦
+///
+/// 由全局快捷键（`global.quickAddWindow`）或托盘菜单调起；应用在后台也能唤起，
+/// 不打断当前主窗工作。窗口内 Enter 追加到今日日记、Esc/失焦自动隐藏（前端处理）。
+pub fn open_quick_add(app: &AppHandle) -> Result<(), AppError> {
+    let label = "quick-add";
+
+    if let Some(win) = app.get_webview_window(label) {
+        // 复用已建窗口：可见则收起，隐藏则前置（配合前端失焦自动 hide）
+        if win.is_visible().unwrap_or(false) {
+            let _ = win.hide();
+        } else {
+            let _ = win.unminimize();
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+        return Ok(());
+    }
+
+    log::info!("[quick-add] 创建快速记一笔悬浮窗");
+
+    let builder = WebviewWindowBuilder::new(
+        app,
+        label,
+        WebviewUrl::App("index.html#/quick-add".into()),
+    )
+    .title("快速记一笔")
+    .inner_size(560.0, 240.0)
+    .center()
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    // 先隐藏建窗，规避新 WebView 加载期间的空白闪屏：
+    // 前端 quick-add 页 React 首帧画好后再自己 show() + setFocus()，
+    // 用户看到的直接就是渲染完整的小窗。后续复用走上面的 show 分支（已渲染，秒开不闪）。
+    .focused(false)
+    .visible(false);
+
+    #[cfg(debug_assertions)]
+    let builder = builder.devtools(true);
+
+    builder
+        .build()
+        .map_err(|e| AppError::Custom(format!("快速记一笔窗口创建失败: {}", e)))?;
+
+    Ok(())
+}

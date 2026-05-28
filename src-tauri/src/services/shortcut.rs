@@ -32,6 +32,7 @@ use crate::state::AppState;
 /// （添加新热键时：1. 在这里加一行；2. 在 dispatch_action 加 match 分支；3. 前端 registry 同步）
 const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("global.quickCapture", "CommandOrControl+Shift+N"),
+    ("global.quickAddWindow", "CommandOrControl+Alt+Space"),
     ("global.showWindow", "CommandOrControl+Alt+K"),
     ("global.openDaily", "CommandOrControl+Alt+D"),
     ("global.openSearch", "CommandOrControl+Alt+F"),
@@ -244,6 +245,11 @@ fn unbind_if_any(app: &AppHandle, id: &str) {
 fn dispatch_action(app: AppHandle, id: &str) {
     match id {
         "global.quickCapture" => action_quick_capture(app),
+        "global.quickAddWindow" => {
+            if let Err(e) = crate::services::popout_window::open_quick_add(&app) {
+                log::warn!("[shortcut] 打开快速记一笔窗口失败: {}", e);
+            }
+        }
         "global.showWindow" => focus_main(&app),
         "global.openDaily" => {
             focus_main(&app);

@@ -3,7 +3,7 @@
   "identifier": "default",
   "description": "桌面端主窗口默认权限（仅 Windows / macOS / Linux）",
   "platforms": ["windows", "macOS", "linux"],
-  "windows": ["main", "emergency-*", "popout-note-*", "popout-mindmap-*"],
+  "windows": ["main", "emergency-*", "popout-note-*", "popout-mindmap-*", "quick-add"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -12,6 +12,8 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
     "core:window:allow-set-always-on-top",
     "opener:default",

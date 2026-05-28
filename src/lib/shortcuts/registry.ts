@@ -37,6 +37,13 @@ export const SHORTCUTS: ShortcutDef[] = [
     desc: "剪贴板内容 → 新笔记",
   },
   {
+    id: "global.quickAddWindow",
+    scope: "global",
+    defaultAccel: "CommandOrControl+Alt+Space",
+    group: "全局快捷键（系统级，后台也可用）",
+    desc: "弹出「快速记一笔」悬浮窗 → 追加今日日记",
+  },
+  {
     id: "global.showWindow",
     scope: "global",
     defaultAccel: "CommandOrControl+Alt+K",
