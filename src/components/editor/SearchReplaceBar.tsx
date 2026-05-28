@@ -125,8 +125,16 @@ export function SearchReplaceBar({ editor, open, showReplace, onClose }: Props) 
         : `${stats.current + 1}/${stats.total}`;
 
   return (
+    // 外层 sticky 0 高度容器：吸附在滚动视口顶部、不占据文档流高度，
+    // 让内部浮条始终停在编辑器可视区右上角，长文档往下滚也不会被顶走。
+    // （工具栏用同样的 sticky top:0 吸顶方案，这里保持一致的交互。）
     <div
-      className="absolute z-20 flex flex-col gap-1.5 rounded-md p-2"
+      className="sticky z-30 flex-shrink-0"
+      style={{ top: 0, height: 0 }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+    <div
+      className="absolute flex flex-col gap-1.5 rounded-md p-2"
       style={{
         top: 8,
         right: 12,
@@ -135,7 +143,6 @@ export function SearchReplaceBar({ editor, open, showReplace, onClose }: Props) 
         boxShadow: token.boxShadowSecondary,
         minWidth: 360,
       }}
-      onMouseDown={(e) => e.stopPropagation()}
     >
       {/* ─── 查找行 ─────────────────────────── */}
       <div className="flex items-center gap-1.5">
@@ -280,6 +287,7 @@ export function SearchReplaceBar({ editor, open, showReplace, onClose }: Props) 
           </Tooltip>
         </div>
       )}
+    </div>
     </div>
   );
 }

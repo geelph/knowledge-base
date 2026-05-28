@@ -22,6 +22,7 @@ import { Color } from "@tiptap/extension-color";
 import Superscript from "@tiptap/extension-superscript";
 import Subscript from "@tiptap/extension-subscript";
 import { FigureImage } from "./FigureExtension";
+import { ImageLightbox } from "./ImageLightbox";
 import { HeadingFold, HEADING_FOLD_REFRESH, HEADING_FOLD_KEY } from "./HeadingFold";
 import { SearchAndReplace } from "./SearchAndReplace";
 import { SearchReplaceBar } from "./SearchReplaceBar";
@@ -917,13 +918,16 @@ export function TiptapEditor({
   const localizeRemoteImagesInEditor = useCallback(
     async (editor: ReturnType<typeof useEditor>) => {
       if (!editor || editor.isDestroyed) return;
+      // 收集需要本地化的图片 src：远程 http(s) + 内联 data:image base64。
+      // data URL 来源：粘贴 Notion / 飞书 / 网页剪藏的 markdown，图片内联成 base64。
+      // 留在文档里既撑大 DB content，又可能因串太长不被正常渲染 → 落盘换 kb-asset://。
       const remoteSrcs = new Set<string>();
       editor.state.doc.descendants((node) => {
         const src = node.attrs?.src;
         if (
           node.type.name === "imageResize" &&
           typeof src === "string" &&
-          /^https?:\/\//i.test(src)
+          /^(https?:\/\/|data:image\/)/i.test(src)
         ) {
           remoteSrcs.add(src);
         }
@@ -949,6 +953,31 @@ export function TiptapEditor({
       let failed = 0;
       await Promise.all(
         Array.from(remoteSrcs).map(async (src, idx) => {
+          // 内联 data:image base64：payload 本身就是裸 base64，直接落盘，不必走网络
+          const dataUrlMatch = src.match(/^data:image\/([a-z0-9.+-]+);base64,(.*)$/i);
+          if (dataUrlMatch) {
+            try {
+              const subtype = dataUrlMatch[1].toLowerCase();
+              const ext =
+                subtype === "jpeg"
+                  ? "jpg"
+                  : subtype === "svg+xml"
+                    ? "svg"
+                    : subtype;
+              // base64 可能夹换行（部分导出器折行）；剔除空白再传
+              const base64 = dataUrlMatch[2].replace(/\s/g, "");
+              const rel = await imageApi.save(
+                effectiveNoteId!,
+                `inline-${Date.now()}-${idx}.${ext}`,
+                base64,
+              );
+              map.set(src, toKbAsset(rel));
+            } catch (e) {
+              failed += 1;
+              console.warn("[paste-md] 内联 data URL 图本地化失败:", String(e));
+            }
+            return;
+          }
           try {
             // 优先 Rust reqwest：绕开 WebView 的 Origin/Referer/CORS，防盗链图床基本只有这条路能成
             const rel = await imageApi.downloadFromUrl(effectiveNoteId!, src);
@@ -1434,7 +1463,7 @@ export function TiptapEditor({
         // Tauri WebView 加载不了（CSP / 防盗链）→ 破图且不落本地。这里不拦截（仍走默认插入），
         // 下一拍把这些远程图抓回本地、改写 src 为 kb-asset://。
         const plainText = dt?.getData("text/plain") ?? "";
-        if (/!\[[^\]]*\]\(\s*https?:\/\//i.test(plainText)) {
+        if (/!\[[^\]]*\]\(\s*(https?:\/\/|data:image\/)/i.test(plainText)) {
           setTimeout(() => {
             void localizeRemoteImagesInEditor(editor);
           }, 0);
@@ -1822,14 +1851,18 @@ export function TiptapEditor({
           <AiWriteMenu editor={editor} onAskAi={onAskAi} />
         </>
       )}
-      <EditorContent editor={editor} className="tiptap-content" />
-      {/* 查找替换浮条（Ctrl+F / Ctrl+H 触发；Esc 关闭） */}
+      {/* 查找替换浮条（Ctrl+F / Ctrl+H 触发；Esc 关闭）。
+          放在 EditorContent 之前：内部用 sticky 0 高度容器吸顶，
+          需位于滚动内容流顶部才能在长文档里始终停在视区右上角不被滚走。 */}
       <SearchReplaceBar
         editor={editor}
         open={searchOpen}
         showReplace={searchShowReplace}
         onClose={() => setSearchOpen(false)}
       />
+      <EditorContent editor={editor} className="tiptap-content" />
+      {/* 图片双击放大：事件委托覆盖正文 / 表格 / figure 内所有图片 */}
+      <ImageLightbox containerRef={wrapperRef} />
       {/* 表格浮动菜单：光标在 table 内时在表格上方显示加列/加行/删列/删行/合并/拆分/删表 */}
       <TableBubbleMenu editor={editor} />
       {/* 斜杠菜单"嵌入网络视频"项的 URL 输入弹窗。

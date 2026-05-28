@@ -1091,6 +1091,8 @@ body,
   height: auto;
   border-radius: 6px;
   margin: 0.5em 0;
+  /* 提示「双击可放大查看大图」（含表格 / figure 内的图）*/
+  cursor: zoom-in;
 }
 /* ── tiptap-extension-resize-image 的图片在窄列/窄内容区里横向溢出的修复 ──
    实测 DOM（图片在分栏的某一列里）：

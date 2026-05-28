@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use base64::Engine;
 use regex::Regex;
 use walkdir::WalkDir;
 
@@ -293,7 +294,30 @@ pub fn rewrite_image_paths(
             let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let raw_url = caps.get(2).map(|m| m.as_str()).unwrap_or("").trim();
 
-            // 跳过外链 / data URL / 已经是 asset URL（重复运行幂等）
+            // 内联 data URL 图片（`data:image/png;base64,...`）：解码落盘 + 改写为 asset URL。
+            // 必须在 is_external_or_asset_url 之前判断（后者会把 data: 当外链跳过）。
+            // 不记 mapping —— 目的就是永久消除这串超大 base64，写回 .md 时不该还原。
+            if let Some((ext, bytes)) = try_decode_image_data_url(raw_url) {
+                let fname = format!("inline.{}", ext);
+                match ImageService::save_bytes(app_data_dir, note_id, &fname, &bytes) {
+                    Ok(new_abs) => {
+                        copied += 1;
+                        let url = path_to_asset_url(Path::new(&new_abs));
+                        return format!("![{}]({})", alt, url);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[import-attach] 笔记 {} 内联 data URL 图片落盘失败: {}",
+                            note_id,
+                            e
+                        );
+                        missing.push("data:image (内联 base64 图)".to_string());
+                        return full_match;
+                    }
+                }
+            }
+
+            // 跳过外链 / 已经是 asset URL（重复运行幂等）
             if is_external_or_asset_url(raw_url) {
                 return full_match;
             }
@@ -412,6 +436,53 @@ fn is_external_or_asset_url(url: &str) -> bool {
         || lower.starts_with("data:")
         || lower.starts_with("file://")
         || lower.starts_with("kb-image://")
+}
+
+/// 尝试把 `data:image/<subtype>;base64,<payload>` 解码成 `(扩展名, 字节)`。
+///
+/// 仅识别 `image/*` 且 base64 编码的 data URL（Notion / 飞书 / 网页剪藏导出的 .md
+/// 常把图片内联成这种形式）。非 data URL / 非图片 / 非 base64 / 解码失败都返回 None，
+/// 调用方据此回退到"按外链跳过"的原逻辑。
+///
+/// base64 payload 里可能夹换行/空白（某些导出器会折行），统一剔除后再解码。
+fn try_decode_image_data_url(url: &str) -> Option<(String, Vec<u8>)> {
+    // 去掉 "data:" 前缀；rest 形如 "image/png;base64,iVBOR..."
+    let rest = url.strip_prefix("data:").or_else(|| url.strip_prefix("DATA:"))?;
+    let comma = rest.find(',')?;
+    let (meta, payload_with_comma) = rest.split_at(comma);
+    let payload = &payload_with_comma[1..]; // 跳过逗号
+
+    let meta_lower = meta.to_ascii_lowercase();
+    if !meta_lower.starts_with("image/") || !meta_lower.contains("base64") {
+        return None;
+    }
+
+    // 取子类型：image/png;base64 → "png"
+    let subtype = meta_lower["image/".len()..]
+        .split(';')
+        .next()
+        .unwrap_or("png");
+    let ext = match subtype {
+        "jpeg" | "jpg" => "jpg",
+        "png" => "png",
+        "gif" => "gif",
+        "webp" => "webp",
+        "svg+xml" | "svg" => "svg",
+        "bmp" => "bmp",
+        "x-icon" | "vnd.microsoft.icon" | "ico" => "ico",
+        "avif" => "avif",
+        _ => "png",
+    };
+
+    // 剔除 payload 内的换行/空白后再解码
+    let cleaned: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(cleaned.as_bytes())
+        .ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    Some((ext.to_string(), bytes))
 }
 
 fn is_image_filename(name: &str) -> bool {
@@ -900,6 +971,47 @@ mod tests {
         let idx = AttachmentIndex::build_for_single_file(&note_dir);
         assert!(idx.by_basename.contains_key("ok.png"));
         assert!(!idx.by_basename.contains_key("should_not_be_indexed.png"));
+    }
+
+    #[test]
+    fn decode_data_url_png() {
+        // 1x1 透明 PNG 的标准 base64
+        let url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMCAYG2pY3mAAAAAElFTkSuQmCC";
+        let r = try_decode_image_data_url(url);
+        assert!(r.is_some(), "应能解码 1x1 png data URL");
+        let (ext, bytes) = r.unwrap();
+        assert_eq!(ext, "png");
+        assert!(bytes.starts_with(b"\x89PNG"), "解码出的字节应是 PNG 头");
+    }
+
+    #[test]
+    fn decode_data_url_rejects_non_image() {
+        assert!(try_decode_image_data_url("data:text/plain;base64,aGVsbG8=").is_none());
+        assert!(try_decode_image_data_url("https://x.com/a.png").is_none());
+        assert!(try_decode_image_data_url("attachments/foo.png").is_none());
+        // 非 base64 编码的 data URL（如 svg 文本）暂不支持
+        assert!(try_decode_image_data_url("data:image/svg+xml,<svg></svg>").is_none());
+    }
+
+    #[test]
+    fn rewrite_inline_data_url_image() {
+        let (vault, app_data) = make_vault();
+        let idx = AttachmentIndex::build(&vault);
+        let body = "前文 ![Image](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMCAYG2pY3mAAAAAElFTkSuQmCC) 后文";
+        let r = rewrite_image_paths(body, 555, &vault, &vault, &idx, &app_data).unwrap();
+        assert_eq!(r.copied, 1, "内联 base64 图应被落盘：{}", r.new_body);
+        assert!(r.missing.is_empty());
+        assert!(
+            r.new_body.contains("asset.localhost") || r.new_body.contains("asset://localhost"),
+            "应改写为 asset URL：{}",
+            r.new_body
+        );
+        // 原始超大 base64 串应已从正文消失
+        assert!(!r.new_body.contains("base64,"), "正文不应再含 base64 串");
+        // alt 文本保留
+        assert!(r.new_body.contains("![Image]"));
+        // data URL 不记 mapping（避免写回 .md 时还原巨大 base64）
+        assert!(r.mappings.is_empty(), "data URL 不应记 mapping");
     }
 
     #[test]

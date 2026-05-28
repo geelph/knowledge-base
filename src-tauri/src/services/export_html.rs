@@ -187,6 +187,26 @@ fn wrap_template(title: &str, body: &str) -> String {
     margin: 1em 0;
     background: #000;
   }}
+  /* 分栏布局（语雀/Notion 风横排多列）：编辑器里靠 app CSS 做 flex 横排，
+     导出的独立 HTML 必须自带这段，否则 .tiptap-columns / .tiptap-column 退回
+     默认 display:block 纵向堆叠 ——「分栏被拆开」。结构为
+     <div class="tiptap-columns"><div class="tiptap-column">…</div>…</div>。 */
+  .tiptap-columns, [data-columns] {{
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 16px;
+    align-items: flex-start;
+    width: 100%;
+    margin: 12px 0;
+  }}
+  .tiptap-columns > .tiptap-column,
+  [data-columns] > [data-column] {{
+    flex: 1 1 0;
+    min-width: 0;
+  }}
+  .tiptap-column > :first-child, [data-column] > :first-child {{ margin-top: 0; }}
+  .tiptap-column > :last-child, [data-column] > :last-child {{ margin-bottom: 0; }}
 </style>
 </head>
 <body>
