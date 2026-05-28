@@ -1038,13 +1038,8 @@ export function NotesPanel() {
     // 点文件夹 / 未分类 → 退出笔记多选（多选只在笔记之间维持）
     if (!isNoteKey(key)) clearMultiSelect();
 
-    // 「未分类」虚拟根节点：点击 = 切换展开 + 跳转 /notes?folder=uncategorized
+    // 「未分类」虚拟根节点：单击 = 仅切换选中 + 跳转；展开/折叠改由双击触发
     if (key === UNCATEGORIZED_KEY) {
-      const cur = uncategorizedExpanded;
-      setUncategorizedExpanded(!cur);
-      if (!cur && uncategorizedNotes.length === 0) {
-        void loadUncategorizedNotes();
-      }
       if (selectedKey === UNCATEGORIZED_KEY) {
         setSelectedKey(null);
         navigate("/notes");
@@ -1074,19 +1069,27 @@ export function NotesPanel() {
       return;
     }
 
-    const now = Date.now();
-    const last = lastClickRef.current;
-    if (last && last.key === key && now - last.time < 300) {
-      lastClickRef.current = null;
-      const name = findFolderName(folders, Number(key));
-      if (name !== null) startRename(key, name);
+    // 文件夹单击 = 仅切换选中 + 跳转；展开/折叠改由双击触发，重命名走 F2/右键菜单
+    if (selectedKey === key) {
+      setSelectedKey(null);
+      navigate("/notes");
+    } else {
+      setSelectedKey(key);
+      navigate(`/notes?folder=${key}`);
+    }
+  }
+
+  /** 文件夹/未分类的双击 = 切换展开/折叠。笔记叶子不参与（无展开态）。 */
+  function handleTitleDoubleClick(key: string) {
+    if (key.startsWith(NEW_NODE_PREFIX) || isNoteKey(key)) return;
+    if (key === UNCATEGORIZED_KEY) {
+      const cur = uncategorizedExpanded;
+      setUncategorizedExpanded(!cur);
+      if (!cur && uncategorizedNotes.length === 0) {
+        void loadUncategorizedNotes();
+      }
       return;
     }
-
-    lastClickRef.current = { key, time: now };
-
-    // 点文件夹标题 = 切换展开/折叠（与 chevron 行为对齐，VS Code / Finder 同款）
-    // 第一次点：展开（按需加载笔记）；再点：折叠。chevron 仍可单独点。
     const wasExpanded = expandedKeys.some((k) => String(k) === key);
     useAppStore.getState().setNotesFolderCollapsed(key, wasExpanded);
     if (!wasExpanded) {
@@ -1094,14 +1097,6 @@ export function NotesPanel() {
       if (Number.isFinite(id) && !notesByFolder.has(id)) {
         void loadNotesForFolder(id);
       }
-    }
-
-    if (selectedKey === key) {
-      setSelectedKey(null);
-      navigate("/notes");
-    } else {
-      setSelectedKey(key);
-      navigate(`/notes?folder=${key}`);
     }
   }
 
@@ -1706,7 +1701,13 @@ export function NotesPanel() {
           className="flex items-center gap-1.5 w-full"
           onClick={(e) => {
             e.stopPropagation();
+            // 双击的第二次 click（detail===2）让 onDoubleClick 处理，跳过单击逻辑
+            if (e.detail > 1) return;
             handleTitleClick(key);
+          }}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            handleTitleDoubleClick(key);
           }}
           title={name}
           style={ctxStyle}
@@ -1737,7 +1738,13 @@ export function NotesPanel() {
         className="flex items-center gap-1.5 w-full"
         onClick={(e) => {
           e.stopPropagation();
+          // 双击的第二次 click（detail===2）让 onDoubleClick 处理，跳过单击逻辑
+          if (e.detail > 1) return;
           handleTitleClick(key);
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          handleTitleDoubleClick(key);
         }}
         title={name}
         style={ctxStyle}
