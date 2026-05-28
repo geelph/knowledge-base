@@ -833,9 +833,8 @@ function DesktopHomePage() {
                       <li
                         className="list-none"
                         style={{
-                          padding: "6px 10px 8px 38px",
-                          background: token.colorFillQuaternary,
-                          borderRadius: 4,
+                          padding: "0 8px 4px 38px",
+                          marginTop: -2,
                         }}
                         onClick={(e) => e.stopPropagation()}
                       >

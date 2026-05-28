@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { App as AntdApp, Button, Checkbox, Input, Spin, theme as antdTheme } from "antd";
+import type { InputRef } from "antd";
 import { Plus, Trash2 } from "lucide-react";
 import { taskApi } from "@/lib/api";
 import type { Task } from "@/types";
@@ -36,6 +37,8 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
   const [loading, setLoading] = useState(false);
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState(false);
+  /** 用于回车追加后保持焦点；disabled input 会失焦，需手动 focus 回来 */
+  const inputRef = useRef<InputRef>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -72,6 +75,9 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
       message.error(`添加失败：${e}`);
     } finally {
       setAdding(false);
+      // adding=true 期间 input 被 disabled 会失焦；下一帧重新拿回焦点，
+      // 用户可以一直回车连续录入
+      requestAnimationFrame(() => inputRef.current?.focus());
     }
   }
 
@@ -132,16 +138,20 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
           </div>
         )
       ) : (
-        <div className="flex flex-col gap-1">
+        <div className={compact ? "flex flex-col" : "flex flex-col gap-1"}>
           {items.map((t) => (
             <div
               key={t.id}
               className="flex items-center gap-2 group"
-              style={{
-                padding: "4px 6px",
-                borderRadius: 4,
-                background: token.colorFillQuaternary,
-              }}
+              style={
+                compact
+                  ? { padding: "1px 4px", borderRadius: 4 }
+                  : {
+                      padding: "4px 6px",
+                      borderRadius: 4,
+                      background: token.colorFillQuaternary,
+                    }
+              }
             >
               <Checkbox
                 checked={t.status === 1}
@@ -175,11 +185,12 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
       )}
 
       <Input
+        ref={inputRef}
         size="small"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onPressEnter={handleAdd}
-        placeholder="+ 新增子任务（回车确认）"
+        placeholder="+ 新增子任务（回车连续录入）"
         prefix={<Plus size={12} style={{ color: token.colorTextTertiary }} />}
         allowClear
         suffix={

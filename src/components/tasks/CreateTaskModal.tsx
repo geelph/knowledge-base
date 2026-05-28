@@ -15,9 +15,9 @@ import {
   Typography,
   theme as antdTheme,
 } from "antd";
-import type { MenuProps, RefSelectProps } from "antd";
+import type { InputRef, MenuProps, RefSelectProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { Plus, NotebookText, Folder as FolderIcon, File as FileIcon, Link as LinkIcon } from "lucide-react";
+import { Plus, NotebookText, Folder as FolderIcon, File as FileIcon, Link as LinkIcon, X } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useNavigate } from "react-router-dom";
 import { taskApi, taskCategoryApi, noteApi, configApi, projectApi } from "@/lib/api";
@@ -113,6 +113,12 @@ export function CreateTaskModal({
   const [projectId, setProjectId] = useState<number | null>(null);
   /** 甘特图起始日；可单独存在（没截止也行）或与 dueDate 组成区间 */
   const [startDate, setStartDate] = useState<Dayjs | null>(null);
+  // ─── 草稿子任务（仅新建模式用） ────────────────
+  /** 新建态尚无主任务 id，子任务先在本地草稿数组里堆着；保存时拿到 newId 后批量 create */
+  const [draftSubtasks, setDraftSubtasks] = useState<string[]>([]);
+  const [draftSubInput, setDraftSubInput] = useState("");
+  /** 回车追加草稿子任务后，保持焦点在输入框（连续录入体验） */
+  const draftSubInputRef = useRef<InputRef>(null);
 
   // 拉分类列表（一次即可；管理弹窗变更后由父组件 onSaved 触发列表刷新）
   useEffect(() => {
@@ -244,6 +250,8 @@ export function CreateTaskModal({
     setNotePickerOpen(false);
     setNoteQuery("");
     setNoteOptions([]);
+    setDraftSubtasks([]);
+    setDraftSubInput("");
   }, [open, editing, presetPriority, presetImportant, presetDueDate, presetCategoryId]);
 
   /** 拉候选笔记：keyword 空 → 最近 8 条，非空 → 模糊搜前 10 条 */
@@ -388,7 +396,7 @@ export function CreateTaskModal({
         }
         message.success("已保存");
       } else {
-        await taskApi.create({
+        const newTaskId = await taskApi.create({
           title: title.trim(),
           description: description.trim() || null,
           priority,
@@ -401,13 +409,36 @@ export function CreateTaskModal({
           links,
           ...repeatPayload.create,
         });
-        message.success("已创建");
+        // 草稿子任务：主任务落库后顺序创建，失败也不阻断主任务（仅 warn）
+        if (draftSubtasks.length > 0) {
+          let failed = 0;
+          for (const subTitle of draftSubtasks) {
+            try {
+              await taskApi.create({
+                title: subTitle,
+                priority: 1,
+                parent_task_id: newTaskId,
+              });
+            } catch {
+              failed++;
+            }
+          }
+          if (failed > 0) {
+            message.warning(`已创建主任务，但 ${failed} 条子任务创建失败`);
+          } else {
+            message.success(`已创建（含 ${draftSubtasks.length} 条子任务）`);
+          }
+        } else {
+          message.success("已创建");
+        }
       }
       if (continuous && !isEdit) {
-        // 连续新建：保留紧急度和截止时间，清空标题/描述/关联
+        // 连续新建：保留紧急度和截止时间，清空标题/描述/关联/草稿子任务
         setTitle("");
         setDescription("");
         setLinks([]);
+        setDraftSubtasks([]);
+        setDraftSubInput("");
         onSaved();
       } else {
         onSaved();
@@ -1012,12 +1043,91 @@ export function CreateTaskModal({
           </div>
         </div>
 
-        {/* 子任务区——仅编辑现有"主任务"时显示（子任务不嵌套） */}
+        {/* 子任务区：
+            - 编辑现有主任务：用 SubtaskList 直接操作真实子任务
+            - 新建主任务：草稿模式（本地数组，主任务落库后批量创建）
+            - 编辑子任务（parent_task_id != null）：不展示（子任务不嵌套） */}
         {isEdit && editing && !editing.parent_task_id && (
           <SubtaskList
             parentTaskId={editing.id}
             onChanged={onSubtaskChanged}
           />
+        )}
+        {!isEdit && (
+          <div className="flex flex-col gap-1">
+            <div
+              className="text-[11px]"
+              style={{ color: token.colorTextSecondary }}
+            >
+              子任务（可选，主任务保存后一并创建）
+              {draftSubtasks.length > 0 && (
+                <span
+                  className="ml-1"
+                  style={{ color: token.colorTextTertiary }}
+                >
+                  · {draftSubtasks.length} 条
+                </span>
+              )}
+            </div>
+            {draftSubtasks.length > 0 && (
+              <div className="flex flex-col gap-1">
+                {draftSubtasks.map((sub, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center gap-2 group"
+                    style={{
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      background: token.colorFillQuaternary,
+                    }}
+                  >
+                    <span
+                      className="flex-1 truncate"
+                      style={{ fontSize: 13 }}
+                      title={sub}
+                    >
+                      {sub}
+                    </span>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<X size={12} />}
+                      onClick={() =>
+                        setDraftSubtasks((prev) =>
+                          prev.filter((_, i) => i !== idx),
+                        )
+                      }
+                      className="opacity-0 group-hover:opacity-100"
+                      style={{ color: token.colorTextTertiary }}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            <Input
+              ref={draftSubInputRef}
+              size="small"
+              value={draftSubInput}
+              onChange={(e) => setDraftSubInput(e.target.value)}
+              onPressEnter={(e) => {
+                // 阻止冒泡到 Modal 标题 onPressEnter 触发保存
+                e.stopPropagation();
+                const t = draftSubInput.trim();
+                if (!t) return;
+                setDraftSubtasks((prev) => [...prev, t]);
+                setDraftSubInput("");
+                // 保险：保持焦点在输入框，回车可连续录入
+                requestAnimationFrame(() =>
+                  draftSubInputRef.current?.focus(),
+                );
+              }}
+              placeholder="+ 新增子任务（回车连续录入）"
+              prefix={
+                <Plus size={12} style={{ color: token.colorTextTertiary }} />
+              }
+              allowClear
+            />
+          </div>
         )}
       </div>
     </Modal>
