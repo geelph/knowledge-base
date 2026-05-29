@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::error::AppError;
 
 /// 当前 Schema 版本
-pub const SCHEMA_VERSION: i32 = 46;
+pub const SCHEMA_VERSION: i32 = 47;
 
 /// 获取数据库版本
 pub fn get_version(conn: &Connection) -> Result<i32, AppError> {
@@ -76,6 +76,7 @@ pub fn migrate(conn: &Connection) -> Result<(), AppError> {
             43 => migrate_v43_to_v44(conn)?,
             44 => migrate_v44_to_v45(conn)?,
             45 => migrate_v45_to_v46(conn)?,
+            46 => migrate_v46_to_v47(conn)?,
             _ => {
                 return Err(AppError::Custom(format!("未知的数据库版本: {}", version)));
             }
@@ -1871,6 +1872,48 @@ fn migrate_v44_to_v45(conn: &Connection) -> Result<(), AppError> {
     )?;
 
     set_version(conn, 45)?;
+    Ok(())
+}
+
+fn migrate_v46_to_v47(conn: &Connection) -> Result<(), AppError> {
+    log::info!("数据库迁移: v46 -> v47 (定时推送 push_jobs / push_run_logs)");
+
+    // 定时推送独立子系统。push_jobs 存订阅本体，push_run_logs 存每次执行快照。
+    // next_run_at 物化存表（而非每次算）：调度器只需 SELECT MIN(next_run_at) 即知下次该睡到几点，
+    // 空闲时零计算。建 (enabled, next_run_at) 复合索引让 peek/list_due 走索引。
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS push_jobs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL,
+            prompt          TEXT NOT NULL,
+            model_id        INTEGER,
+            source_kind     TEXT NOT NULL DEFAULT 'none',
+            source_config   TEXT NOT NULL DEFAULT '{}',
+            schedule_time   TEXT NOT NULL,
+            repeat_kind     TEXT NOT NULL DEFAULT 'daily',
+            repeat_weekdays TEXT,
+            channels        TEXT NOT NULL DEFAULT '[\"notification\"]',
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            last_run_at     TEXT,
+            next_run_at     TEXT,
+            created_at      DATETIME DEFAULT (datetime('now','localtime')),
+            updated_at      DATETIME DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_push_jobs_next ON push_jobs(enabled, next_run_at);
+        CREATE TABLE IF NOT EXISTS push_run_logs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id      INTEGER NOT NULL,
+            run_at      TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            item_count  INTEGER NOT NULL DEFAULT 0,
+            payload     TEXT,
+            error       TEXT,
+            FOREIGN KEY(job_id) REFERENCES push_jobs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_push_run_logs_job ON push_run_logs(job_id, run_at);",
+    )?;
+
+    set_version(conn, 47)?;
     Ok(())
 }
 

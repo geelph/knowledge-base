@@ -975,9 +975,15 @@ function DesktopNoteEditorPage() {
       return;
     }
     setSaving(true);
+    // 标题是否被改动：保存后用来决定要不要 bump 侧栏笔记缓存。
+    // tabs overlay 已覆盖渲染，但用户关 tab 后侧栏回退到 note.title（DB 缓存里的旧值）→
+    // 需要 bumpNotesRefresh 让 NotesPanel 重拉 notesByFolder / uncategorizedNotes，
+    // 把 DB 真值灌进缓存。仅在 title 真变化时 bump：避免内容自动保存频繁触发侧栏闪烁。
+    const prevTitle = note?.title ?? "";
+    const nextTitle = title.trim();
     try {
       const updated = await noteApi.update(noteId, {
-        title: title.trim(),
+        title: nextTitle,
         content,
         folder_id: note?.folder_id,
       });
@@ -987,6 +993,10 @@ function DesktopNoteEditorPage() {
       updateTabTitle(noteId, updated.title);
       // 内容已落库，清掉草稿快照
       clearDraft(noteId);
+
+      if (updated.title !== prevTitle) {
+        useAppStore.getState().bumpNotesRefresh();
+      }
 
       // 解析 wiki 链接并同步反链
       // 优先级：[[标题|ID]] 显式 ID → 直接用；否则按标题模糊查 ID（旧 / 手敲形式）

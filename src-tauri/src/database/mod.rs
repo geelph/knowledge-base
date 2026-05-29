@@ -7,6 +7,7 @@ pub mod mcp_servers;
 pub mod note_attachments;
 pub mod notes;
 pub mod prompt;
+pub mod push;
 pub mod schema;
 pub mod search;
 pub mod sync;

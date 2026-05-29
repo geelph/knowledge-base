@@ -29,6 +29,9 @@ pub struct AppState {
     /// 调度器立刻重新计算"下一个最早提醒时刻"并重 sleep。
     /// 这样实现的精度 ~毫秒，且空闲时零 DB 查询（只在事件驱动 + 5min 兜底唤醒时扫）。
     pub reminder_notify: Arc<Notify>,
+    /// 定时推送调度器唤醒信号：用户增/改/删/启停推送时 notify_one，
+    /// 调度器立刻重算"下一个最早 next_run_at"并重 sleep。语义同 reminder_notify。
+    pub push_notify: Arc<Notify>,
     /// 启动时 argv 里的 .md 文件路径，等前端 mount 后 take 出来
     pub pending_open_md_path: Mutex<Option<String>>,
     /// T-007 笔记加密保险库：内存中的主密钥（可选），锁定时清空
@@ -59,6 +62,7 @@ impl AppState {
             sync_scheduler_notify: Arc::new(Notify::new()),
             sync_v1_gate: crate::services::sync_v1::lock::SyncGate::new(),
             reminder_notify: Arc::new(Notify::new()),
+            push_notify: Arc::new(Notify::new()),
             pending_open_md_path: Mutex::new(None),
             vault: RwLock::new(VaultState::default()),
             mcp_internal,

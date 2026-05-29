@@ -18,6 +18,7 @@ import { MobileSync } from "@/pages/sync/MobileSync";
 import TasksPage from "@/pages/tasks";
 import CardsPage from "@/pages/cards";
 import PromptsPage from "@/pages/prompts";
+import PushPage from "@/pages/push";
 import HiddenPage from "@/pages/hidden";
 import QuickCreatePage from "@/pages/quick-create";
 import QuickCapturePage from "@/pages/quick-capture";
@@ -96,6 +97,7 @@ const router = createHashRouter([
       { path: "graph", element: <GraphPage /> },
       { path: "ai", element: <AiChatPage /> },
       { path: "prompts", element: <PromptsPage /> },
+      { path: "push", element: <PushPage /> },
       { path: "tasks", element: <TasksPage /> },
       { path: "cards", element: <CardsPage /> },
       { path: "settings", element: <SettingsPage /> },

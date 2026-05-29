@@ -683,6 +683,105 @@ impl AiService {
         Ok(cleaned)
     }
 
+    /// 无人值守的单轮补全：给一段提示词，返回 AI 的完整文本。
+    ///
+    /// 与 `chat_stream` / `write_assist` 的区别：**非流式**（`stream: false`）、不 emit 事件、
+    /// 不依赖 window/AppHandle/cancel_rx，适合后台调度器（定时推送）直接调用。
+    /// 请求构造与错误中文化复用 `suggest_prompt` 的同款逻辑（OpenAI 兼容 / Ollama 两分支）。
+    ///
+    /// - `model`：None 时取默认模型；Some(id) 时取指定模型
+    /// - 超时 90s（生成型内容可能较长，比 suggest 的 10s 宽松）
+    /// - `max_tokens` / `num_predict` 给 800，覆盖一段简报/格言/单词卡的长度
+    pub async fn complete_once(
+        db: &Database,
+        prompt: &str,
+        model_id: Option<i64>,
+    ) -> Result<String, AppError> {
+        let model = match model_id {
+            Some(id) => db.get_ai_model(id)?,
+            None => db.get_default_ai_model()?,
+        };
+
+        let messages = vec![json!({ "role": "user", "content": prompt })];
+        let timeout = std::time::Duration::from_secs(90);
+
+        let raw = if model.provider == "ollama" {
+            let url = format!("{}/api/chat", model.api_url.trim().trim_end_matches('/'));
+            let client = build_ollama_client();
+            let response = client
+                .post(&url)
+                .timeout(timeout)
+                .json(&json!({
+                    "model": model.model_id,
+                    "messages": messages,
+                    "stream": false,
+                    "options": { "num_predict": 800 }
+                }))
+                .send()
+                .await
+                .map_err(|e| AppError::Custom(format_ollama_send_error(&e, &url)))?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(AppError::Custom(format!(
+                    "Ollama 返回错误 {}：{}",
+                    status,
+                    body.chars().take(200).collect::<String>()
+                )));
+            }
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|e| AppError::Custom(format!("Ollama 响应解析失败: {}", e)))?;
+            body["message"]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            let client = crate::services::http_client::shared();
+            let url = build_openai_chat_url(&model.api_url);
+            let mut request = client
+                .post(&url)
+                .timeout(timeout)
+                .header("Content-Type", "application/json")
+                .json(&json!({
+                    "model": model.model_id,
+                    "messages": messages,
+                    "max_tokens": 800,
+                    "stream": false
+                }));
+            if let Some(key) = &model.api_key {
+                if !key.trim().is_empty() {
+                    request = request.header("Authorization", format!("Bearer {}", key));
+                }
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|e| AppError::Custom(format!("API 请求失败: {}", e)))?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(AppError::Custom(format_openai_api_error(status, &body)));
+            }
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|e| AppError::Custom(format!("响应解析失败: {}", e)))?;
+            body["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        // 去掉小模型偶尔输出的伪 <think>/工具调用噪声，再 trim
+        let cleaned = strip_pseudo_tool_calls(&raw).trim().to_string();
+        if cleaned.is_empty() {
+            return Err(AppError::Custom("AI 未返回有效内容".into()));
+        }
+        Ok(cleaned)
+    }
+
     /// 测试 AI 模型连通性。
     ///
     /// 不依赖数据库，直接基于 `AiModelInput` 试探，方便用户在「添加/编辑模型」Modal

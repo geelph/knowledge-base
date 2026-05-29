@@ -1420,3 +1420,69 @@ export interface MobileUpdateInfo {
   /** APK 直链（优先）或 release 发布页（回落） */
   download_url: string;
 }
+
+// ─── 定时推送（v47） ──────────────────────────────
+// 独立子系统：用户维护多条「推送」，每条 = 提示词 +（可选）数据源 + 定时规则 + 推送方式。
+// 字段与 Rust models::PushJob 逐字对齐（snake_case）。
+
+/** 循环规则 */
+export type PushRepeatKind = "daily" | "weekly";
+
+/** 一条定时推送 */
+export interface PushJob {
+  id: number;
+  /** 展示名，如"每日励志" */
+  name: string;
+  /** ★核心：到点交给 AI 执行的提示词 */
+  prompt: string;
+  /** 用哪个 AI 模型；null = 默认模型 */
+  model_id: number | null;
+  /** 数据源类型：MVP 固定 "none"；预留 "rss" / "notes" */
+  source_kind: string;
+  /** 数据源配置 JSON 字符串；MVP "{}" */
+  source_config: string;
+  /** 触发时刻 "HH:MM" */
+  schedule_time: string;
+  /** 循环规则 */
+  repeat_kind: PushRepeatKind;
+  /** 每周哪几天，ISO 1=Mon..7=Sun 逗号分隔；仅 weekly 有意义 */
+  repeat_weekdays: string | null;
+  /** 推送方式 JSON 数组字符串，如 ["notification"] */
+  channels: string;
+  enabled: boolean;
+  /** 上次实际运行时刻；null = 从未运行 */
+  last_run_at: string | null;
+  /** 下次预计运行时刻；null = 未启用/无计划 */
+  next_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 新建推送入参（可选字段后端有默认值） */
+export interface CreatePushJobInput {
+  name: string;
+  prompt: string;
+  model_id?: number | null;
+  source_kind?: string | null;
+  source_config?: string | null;
+  schedule_time: string;
+  repeat_kind?: PushRepeatKind | null;
+  repeat_weekdays?: string | null;
+  channels?: string | null;
+  enabled?: boolean | null;
+}
+
+/** 更新推送入参（与新建同构） */
+export type UpdatePushJobInput = CreatePushJobInput;
+
+/** 一次推送执行记录 */
+export interface PushRunLog {
+  id: number;
+  job_id: number;
+  run_at: string;
+  /** "success" / "failed" / "empty" */
+  status: string;
+  item_count: number;
+  payload: string | null;
+  error: string | null;
+}

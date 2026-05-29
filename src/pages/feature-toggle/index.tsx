@@ -17,6 +17,7 @@ import {
   GitFork,
   Bot,
   Sparkles,
+  BellRing,
   EyeOff,
   // 移动端 Dashboard 项 / Tab 选择器额外用到
   Home as HomeIcon,
@@ -138,6 +139,13 @@ const OPTIONS: OptionMeta[] = [
     desc: "管理常用 AI 提示词模板",
     icon: <Sparkles size={16} className="text-yellow-600" />,
     iconBg: "bg-yellow-100",
+  },
+  {
+    view: "push",
+    label: "定时推送",
+    desc: "定时让 AI 跑提示词并推送结果",
+    icon: <BellRing size={16} className="text-indigo-600" />,
+    iconBg: "bg-indigo-100",
   },
   {
     view: "hidden",

@@ -14,6 +14,7 @@ import {
   GitBranch,
   Bot,
   Sparkles,
+  BellRing,
   Trash2,
   Info,
   EyeOff,
@@ -75,6 +76,7 @@ const MAIN_GROUPS: ActivityItem[][] = [
   [
     { view: "ai", route: "/ai", label: "AI 问答", icon: <Bot size={20} /> },
     { view: "prompts", route: "/prompts", label: "提示词", icon: <Sparkles size={20} /> },
+    { view: "push", route: "/push", label: "定时推送", icon: <BellRing size={20} /> },
   ],
 ];
 
@@ -96,6 +98,7 @@ const ROUTE_TO_VIEW: Array<[string, ActiveView]> = [
   ["/graph", "graph"],
   ["/ai", "ai"],
   ["/prompts", "prompts"],
+  ["/push", "push"],
   ["/hidden", "hidden"],
   ["/trash", "trash"],
   ["/about", "about"],

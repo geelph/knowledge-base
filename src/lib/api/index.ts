@@ -102,6 +102,10 @@ import type {
   TranscribeRequest,
   TranscribeResult,
   AsrTestResult,
+  PushJob,
+  CreatePushJobInput,
+  UpdatePushJobInput,
+  PushRunLog,
 } from "@/types";
 
 /** 系统相关 API */
@@ -779,6 +783,24 @@ export const promptApi = {
   delete: (id: number) => invoke<boolean>("delete_prompt", { id }),
   setEnabled: (id: number, enabled: boolean) =>
     invoke<void>("set_prompt_enabled", { id, enabled }),
+};
+
+/** 定时推送：用户维护多条推送，到点让 AI 跑提示词并推送结果 */
+export const pushApi = {
+  list: () => invoke<PushJob[]>("list_push_jobs"),
+  get: (id: number) => invoke<PushJob>("get_push_job", { id }),
+  create: (input: CreatePushJobInput) =>
+    invoke<number>("create_push_job", { input }),
+  update: (id: number, input: UpdatePushJobInput) =>
+    invoke<boolean>("update_push_job", { id, input }),
+  delete: (id: number) => invoke<boolean>("delete_push_job", { id }),
+  setEnabled: (id: number, enabled: boolean) =>
+    invoke<boolean>("set_push_job_enabled", { id, enabled }),
+  /** 立即运行一次（调试/即时查看） */
+  runNow: (id: number) => invoke<void>("run_push_job_now", { id }),
+  /** 某条推送的最近运行历史 */
+  logs: (jobId: number, limit?: number) =>
+    invoke<PushRunLog[]>("list_push_run_logs", { jobId, limit }),
 };
 
 /** 同步 API（V0 快照归档：本地 ZIP + WebDAV 全量快照） */

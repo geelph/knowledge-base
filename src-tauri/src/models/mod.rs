@@ -1997,3 +1997,93 @@ pub struct CardStats {
     /// 总卡数（不含已删除）
     pub total: i64,
 }
+
+// ─── 定时推送（v47 引入） ─────────────────────────
+//
+// 独立子系统：用户维护多条「推送」，每条 = 一段提示词 +（可选）数据源 + 定时规则 + 推送方式。
+// 到点后由后台调度器（services/push/scheduler.rs）让 AI 跑这段提示词，把结果按 channels 推给用户。
+// 刻意不复用 tasks 表：推送没有"完成"概念，循环语义也不同，独立建模避免互相污染。
+// 字段命名沿用本项目惯例：snake_case + 无 rename_all，与前端 TS 接口逐字对齐。
+
+/// 一条定时推送（订阅）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushJob {
+    pub id: i64,
+    /// 展示名，如"每日励志"
+    pub name: String,
+    /// ★核心：用户维护的提示词，到点交给 AI 执行
+    pub prompt: String,
+    /// 用哪个 AI 模型；None = 用默认模型
+    pub model_id: Option<i64>,
+    /// 数据源类型：MVP 固定 "none"；预留 "rss" / "notes"
+    pub source_kind: String,
+    /// 数据源配置（JSON 字符串）；MVP 为 "{}"
+    pub source_config: String,
+    /// 触发时刻 "HH:MM"，如 "08:00"
+    pub schedule_time: String,
+    /// 循环规则："daily" / "weekly"
+    pub repeat_kind: String,
+    /// 每周哪几天，ISO 1=Mon..7=Sun 逗号分隔；仅 weekly 有意义
+    pub repeat_weekdays: Option<String>,
+    /// 推送方式（JSON 数组字符串），如 ["notification"]
+    pub channels: String,
+    /// 是否启用
+    pub enabled: bool,
+    /// 上次实际运行时刻 'YYYY-MM-DD HH:MM:SS'，用于跨天去重 + 错过补推判断
+    pub last_run_at: Option<String>,
+    /// 下次预计运行时刻 'YYYY-MM-DD HH:MM:SS'，调度器据此 peek + sleep
+    pub next_run_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 新建推送入参
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreatePushJobInput {
+    pub name: String,
+    pub prompt: String,
+    pub model_id: Option<i64>,
+    /// 缺省按 "none"
+    pub source_kind: Option<String>,
+    /// 缺省按 "{}"
+    pub source_config: Option<String>,
+    pub schedule_time: String,
+    /// 缺省按 "daily"
+    pub repeat_kind: Option<String>,
+    pub repeat_weekdays: Option<String>,
+    /// 缺省按 ["notification"]
+    pub channels: Option<String>,
+    /// 缺省按 true
+    pub enabled: Option<bool>,
+}
+
+/// 更新推送入参（全量覆盖业务字段，调度字段 last_run_at/next_run_at 不由前端改）
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdatePushJobInput {
+    pub name: String,
+    pub prompt: String,
+    pub model_id: Option<i64>,
+    pub source_kind: Option<String>,
+    pub source_config: Option<String>,
+    pub schedule_time: String,
+    pub repeat_kind: Option<String>,
+    pub repeat_weekdays: Option<String>,
+    pub channels: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+/// 一次推送执行记录（成功/失败/空结果），供排错与"查看上次推了什么"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushRunLog {
+    pub id: i64,
+    pub job_id: i64,
+    pub run_at: String,
+    /// "success" / "failed" / "empty"
+    pub status: String,
+    /// 生成/抓取到的条目数（MVP 生成型恒为 1 或 0）
+    pub item_count: i32,
+    /// 生成结果快照（成功时为 AI 输出文本）
+    pub payload: Option<String>,
+    /// 失败原因
+    pub error: Option<String>,
+}

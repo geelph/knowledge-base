@@ -44,6 +44,7 @@ pub mod popout_window;
 pub mod dataview;
 pub mod project;
 pub mod prompt;
+pub mod push;
 pub mod quick_capture;
 pub mod safe_filename;
 pub mod search;

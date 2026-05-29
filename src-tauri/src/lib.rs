@@ -801,6 +801,12 @@ pub fn run() {
                 services::task_reminder::run_reminder_loop(app_handle_reminder).await;
             });
 
+            // 定时推送调度器（独立于待办提醒，骨架同源）
+            let app_handle_push = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                services::push::scheduler::run_push_loop(app_handle_push).await;
+            });
+
             // setup 末尾再 show + set_focus 抢焦点：
             // - 主窗已在 setup 第一步 show 过，这里 show 是幂等的
             // - 真正作用是 set_focus：迁移 splash 关闭后 / 多窗口创建后把焦点拉回主窗
@@ -1012,6 +1018,15 @@ pub fn run() {
             commands::prompt::update_prompt,
             commands::prompt::delete_prompt,
             commands::prompt::set_prompt_enabled,
+            // 定时推送
+            commands::push::list_push_jobs,
+            commands::push::get_push_job,
+            commands::push::create_push_job,
+            commands::push::update_push_job,
+            commands::push::delete_push_job,
+            commands::push::set_push_job_enabled,
+            commands::push::run_push_job_now,
+            commands::push::list_push_run_logs,
             // 导入模块
             commands::import::scan_markdown_folder,
             commands::import::import_selected_files,
