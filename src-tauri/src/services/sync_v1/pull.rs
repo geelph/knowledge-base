@@ -531,6 +531,19 @@ pub fn pull<R: Runtime, E: Emitter<R>>(
             Some(id) => id,
             None => continue,
         };
+        // P0：远端删除前先看本地有没有"未推送的新编辑"。有 → 本地编辑比这次远端删除更值得保留，
+        // 不软删（edit-wins）：本地保持原样，下次 push 时这条非 tombstone + hash 已变 → 重新推到
+        // 远端（相当于本地编辑复活被删的笔记）。此处不更新 remote_state，保持"本地有改动待推"状态。
+        if local_has_unpushed_change(
+            local_hash_by_uuid.get(entry.stable_id.as_str()).copied(),
+            remote_states.get(&local_id).map(|s| s.last_synced_hash.as_str()),
+        ) {
+            log::warn!(
+                "[sync_v1] 远端已删除笔记 {} 但本地有未推送改动 → 保留本地（edit-wins），下次 push 将重新上传",
+                entry.title
+            );
+            continue;
+        }
         match db.soft_delete_note(local_id) {
             Ok(true) => {
                 result.deleted_local += 1;
@@ -918,6 +931,22 @@ fn should_overwrite_tags(remote_updated_at: &str, local_updated_at: Option<&str>
     }
 }
 
+/// 处理远端 tombstone（删除）时：本地是否有"未推送的新编辑"。
+///
+/// 判据：本地当前 content_hash 已知 + 上次同步 hash 已知 + 两者不同
+///（说明本地在上次同步之后改过、但还没推上去）。
+/// 缺信息（该笔记从未成功同步过 / 本地 manifest 无此条）→ 返回 false，按原 delete-wins 走。
+///
+/// 返回 true 时调用方应**保留本地、跳过软删**（edit-wins）：本地这条非 tombstone 且 hash 已变，
+/// 下次 push 的 diff 会把它当作 to_push 重新上传，相当于本地编辑"复活"被删的笔记，
+/// 避免"在别端删除前后本地刚改的内容被静默软删进回收站"。
+fn local_has_unpushed_change(local_hash: Option<&str>, last_synced_hash: Option<&str>) -> bool {
+    match (local_hash, last_synced_hash) {
+        (Some(lh), Some(ls)) => lh != ls,
+        _ => false,
+    }
+}
+
 /// 把 "工作/周报" 风格的路径递归展平成 folder_id
 ///
 /// 复用 `FolderService::ensure_path`（T-006 阶段已实现）
@@ -955,6 +984,18 @@ mod tests {
         assert!(!should_overwrite_tags("2026-01-01 00:00:00", Some("2026-02-01 00:00:00")));
         // 本地 updated_at 缺失 → 兜底覆盖
         assert!(should_overwrite_tags("2026-01-01 00:00:00", None));
+    }
+
+    #[test]
+    fn local_unpushed_change_blocks_remote_delete() {
+        // 本地 hash 偏离上次同步 hash（本地有未推送改动）→ 远端删除应被跳过（保留本地，edit-wins）
+        assert!(local_has_unpushed_change(Some("localNew"), Some("synced")));
+        // 本地未改（== 上次同步）→ 允许删除（delete-wins 原行为）
+        assert!(!local_has_unpushed_change(Some("synced"), Some("synced")));
+        // 从未同步过 / 信息缺失 → 不阻止删除（按原 delete-wins，避免误判保留）
+        assert!(!local_has_unpushed_change(Some("local"), None));
+        assert!(!local_has_unpushed_change(None, Some("synced")));
+        assert!(!local_has_unpushed_change(None, None));
     }
 
     // ───────── Bug 12b：apply_pulled_* 端到端测试 ─────────

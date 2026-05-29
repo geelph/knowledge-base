@@ -265,6 +265,19 @@ impl SyncService {
                 continue;
             }
 
+            // 安全（ZIP slip 防护）：合法导出端只会写出 app.db / settings.json /
+            // <dev->kb_assets|pdfs|sources>/... 这类规整相对路径。entry 名含 `..`、
+            // 以 `/` 或 `\` 开头、带 Windows 盘符或 NUL 一律视为被篡改 / 损坏的包，
+            // 直接中止导入（fail-closed），绝不让下面的 `data_dir.join(name)` 把文件
+            // 写到 data_dir 之外（如自启动目录、覆盖系统文件）。
+            // 与 V1 `sync_v1::pull` 附件还原的路径校验同款规则，两条导入链路保持一致。
+            if !is_safe_zip_entry_name(&name) {
+                return Err(AppError::Custom(format!(
+                    "同步包包含非法路径条目 {:?}，疑似被篡改或损坏，已中止导入",
+                    name
+                )));
+            }
+
             let target = match name.as_str() {
                 n if n == DB_FILE_IN_ZIP => {
                     // app.db 写入到传入的 db_path（可能是 dev- 前缀）
@@ -823,6 +836,27 @@ fn settings_file_name() -> &'static str {
     }
 }
 
+/// ZIP entry 名安全校验：防 ZIP slip（路径遍历 / 绝对路径写穿 data_dir）。
+///
+/// 合法同步包的 entry 名只会是 `app.db` / `settings.json` / `<dev->kb_assets/...`
+/// 这类规整相对路径（ZIP 内分隔符为 `/`）。下列情形一律判为不安全：
+/// - 空名
+/// - 绝对路径（以 `/` 或 `\` 开头）
+/// - 父目录穿越（任意位置含 `..`）
+/// - Windows 盘符（含 `:\` 或 `:/`，如 `C:\` / `C:/`）
+/// - 含 NUL 字节
+///
+/// 规则与 V1 `sync_v1::pull` 附件还原的路径校验保持一致，保证两条导入链路同样 fail-closed。
+fn is_safe_zip_entry_name(name: &str) -> bool {
+    !(name.is_empty()
+        || name.starts_with('/')
+        || name.starts_with('\\')
+        || name.contains("..")
+        || name.contains(":\\")
+        || name.contains(":/")
+        || name.contains('\0'))
+}
+
 /// 本机设备名作为云端 ZIP 文件名（同一 WebDAV 下多设备互不覆盖）
 #[cfg(test)]
 mod tests {
@@ -1070,6 +1104,95 @@ mod tests {
         ));
         let removed = SyncService::cleanup_orphan_temp_files(&nowhere);
         assert_eq!(removed, 0, "目录不存在时不应 panic，返回 0");
+    }
+
+    // ─── ZIP slip 路径遍历防护 ─────────────────────────
+
+    #[test]
+    fn is_safe_zip_entry_name_accepts_legit_rejects_traversal() {
+        // 合法：固定名 + 规整相对资产路径（dev/prod 前缀都算合法；普通点号不误伤）
+        assert!(is_safe_zip_entry_name("app.db"));
+        assert!(is_safe_zip_entry_name("settings.json"));
+        assert!(is_safe_zip_entry_name("kb_assets/images/abc.png"));
+        assert!(is_safe_zip_entry_name("dev-kb_assets/images/中文名.png"));
+        assert!(is_safe_zip_entry_name("pdfs/2026/report.pdf"));
+        assert!(is_safe_zip_entry_name("sources/a.b.c.txt"));
+
+        // 非法：父目录穿越
+        assert!(!is_safe_zip_entry_name("../evil.txt"));
+        assert!(!is_safe_zip_entry_name("kb_assets/../../evil.txt"));
+        assert!(!is_safe_zip_entry_name("..\\evil.txt"));
+        // 非法：绝对路径 / UNC
+        assert!(!is_safe_zip_entry_name("/etc/passwd"));
+        assert!(!is_safe_zip_entry_name("\\\\server\\share\\x"));
+        // 非法：Windows 盘符
+        assert!(!is_safe_zip_entry_name("C:\\Windows\\System32\\x.dll"));
+        assert!(!is_safe_zip_entry_name("C:/Windows/x"));
+        // 非法：空名 / NUL
+        assert!(!is_safe_zip_entry_name(""));
+        assert!(!is_safe_zip_entry_name("kb_assets/x\0.png"));
+    }
+
+    /// ZIP slip 端到端：含 `..` 穿越 entry 的恶意包必须被拒绝，且越界文件绝不落盘。
+    #[test]
+    fn import_rejects_zip_slip_entry() {
+        use std::io::Cursor;
+        let tmp = std::env::temp_dir().join(format!(
+            "kb-zipslip-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let dest_db = tmp.join("dest-app.db");
+        Database::init(dest_db.to_str().unwrap())
+            .unwrap()
+            .release()
+            .ok();
+
+        // 构造恶意 zip：合法 manifest（is_dev=None 跳过 dev/prod 校验）+ 一个父目录穿越 entry
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut zip = ZipWriter::new(Cursor::new(&mut buf));
+            let opt = SimpleFileOptions::default();
+            let manifest = SyncManifest {
+                schema_version: 1,
+                device: "t".into(),
+                exported_at: "x".into(),
+                app_version: "t".into(),
+                scope: SyncScope {
+                    notes: false,
+                    images: true,
+                    pdfs: false,
+                    sources: false,
+                    settings: false,
+                },
+                stats: SyncStats::default(),
+                is_dev: None,
+            };
+            zip.start_file(MANIFEST_FILE, opt).unwrap();
+            zip.write_all(serde_json::to_string(&manifest).unwrap().as_bytes())
+                .unwrap();
+            // 越界 entry：试图写到 data_dir 的上一级
+            zip.start_file("../kb-zipslip-EVIL.txt", opt).unwrap();
+            zip.write_all(b"pwned").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let res = SyncService::apply_snapshot_from_reader(
+            &tmp,
+            &dest_db,
+            Cursor::new(&buf),
+            SyncImportMode::Merge,
+        );
+        assert!(res.is_err(), "含 ../ 穿越 entry 的包必须被拒绝导入");
+
+        // 越界文件绝不能被写到 data_dir 之外
+        let escaped = tmp.parent().unwrap().join("kb-zipslip-EVIL.txt");
+        assert!(!escaped.exists(), "ZIP slip 越界文件不得落盘");
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
 
