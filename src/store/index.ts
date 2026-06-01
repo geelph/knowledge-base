@@ -315,6 +315,19 @@ interface AppStore {
    */
   notesFoldersInitialCollapseDone: boolean;
   /**
+   * NotesPanel「每次启动默认收起所有文件夹」开关（持久化，默认 true）。
+   * 开启时：每次应用启动后首次拿到文件夹，就把全部文件夹折叠一次；
+   *        之后由用户操作驱动展开/折叠（本次会话内记忆，重启再次收起）。
+   * 关闭时：回到"跨重启记住上次展开/折叠状态"的行为。
+   */
+  notesCollapseFoldersOnStartup: boolean;
+  /**
+   * 会话级标志（不持久化、不参与 loadFromStore）：本次应用启动是否已执行过"启动收起"。
+   * 应用重启（页面重载）后随 store 重建自动归 false，从而每次启动都收起一次。
+   * 仅在 notesCollapseFoldersOnStartup 开启时有意义。
+   */
+  notesStartupCollapseApplied: boolean;
+  /**
    * 主题自定义总开关（持久化）。
    * 关闭时所有 customAccent / customBgImage / customBgDim 都不生效，等同回到原始 4 套主题。
    */
@@ -492,6 +505,10 @@ interface AppStore {
   setNotesShowOnlyFolders: (only: boolean) => void;
   /** 标记 NotesPanel 已完成首次"全部折叠"初始化（一次性） */
   markNotesFoldersInitialCollapseDone: () => void;
+  /** 设置"每次启动默认收起所有文件夹"开关 */
+  setNotesCollapseFoldersOnStartup: (on: boolean) => void;
+  /** 标记本次会话已执行过"启动收起"（会话级，一次性） */
+  markNotesStartupCollapseApplied: () => void;
   /** 启动时从 app_config 拉默认文件夹 / 标签到 store（失败静默） */
   loadNoteDefaults: () => Promise<void>;
   /** 设置默认文件夹（null = 清除）+ 持久化到 app_config */
@@ -623,6 +640,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   notesUncategorizedExpanded: false,
   notesShowOnlyFolders: false,
   notesFoldersInitialCollapseDone: false,
+  notesCollapseFoldersOnStartup: true,
+  notesStartupCollapseApplied: false,
   defaultFolderId: null,
   defaultTagIds: [],
   notesHeadingFolded: {},
@@ -947,6 +966,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setNotesShowOnlyFolders: (only) => set({ notesShowOnlyFolders: only }),
   markNotesFoldersInitialCollapseDone: () =>
     set({ notesFoldersInitialCollapseDone: true }),
+  setNotesCollapseFoldersOnStartup: (on) =>
+    set({ notesCollapseFoldersOnStartup: on }),
+  markNotesStartupCollapseApplied: () =>
+    set({ notesStartupCollapseApplied: true }),
   loadNoteDefaults: async () => {
     try {
       const folderRaw = await getConfigOrNull("default_folder_id");
@@ -1348,9 +1371,16 @@ export async function loadThemeFromStore() {
       useAppStore.getState().setDefaultViewMode(dvm);
     }
 
-    // 恢复 NotesPanel 折叠偏好
+    // 先恢复"启动默认收起"开关（默认 true）。必须先读它，再决定是否恢复折叠集合：
+    // 开启时启动要全部收起，恢复上次会话的折叠集合没意义且会与"启动收起"逻辑打架，直接跳过。
+    const ncfos = await store.get<boolean>("notesCollapseFoldersOnStartup");
+    const collapseOnStartup = typeof ncfos === "boolean" ? ncfos : true;
+    if (typeof ncfos === "boolean") {
+      useAppStore.setState({ notesCollapseFoldersOnStartup: ncfos });
+    }
+    // 恢复 NotesPanel 折叠偏好（仅"启动收起"关闭时恢复；开启时交给启动收起逻辑全部收起）
     const nck = await store.get<string[]>("notesCollapsedFolderKeys");
-    if (Array.isArray(nck)) {
+    if (!collapseOnStartup && Array.isArray(nck)) {
       useAppStore.setState({
         notesCollapsedFolderKeys: nck.filter((k) => typeof k === "string"),
       });
@@ -1446,6 +1476,7 @@ export async function saveThemeToStore() {
       notesUncategorizedExpanded,
       notesShowOnlyFolders,
       notesFoldersInitialCollapseDone,
+      notesCollapseFoldersOnStartup,
       notesHeadingFolded,
       themeOverridesEnabled,
       customAccent,
@@ -1484,6 +1515,10 @@ export async function saveThemeToStore() {
       "notesFoldersInitialCollapseDone",
       notesFoldersInitialCollapseDone,
     );
+    await store.set(
+      "notesCollapseFoldersOnStartup",
+      notesCollapseFoldersOnStartup,
+    );
     await store.set("notesHeadingFolded", notesHeadingFolded);
     await store.set("themeOverridesEnabled", themeOverridesEnabled);
     await store.set("customAccent", customAccent);
@@ -1503,7 +1538,7 @@ useAppStore.subscribe((state) => {
   // notesHeadingFolded 摘要：用 entries 数 + 总 anchor 数 简化对比，避免每次 stringify 大对象
   const headingFoldEntries = Object.entries(state.notesHeadingFolded);
   const headingFoldKey = `${headingFoldEntries.length}:${headingFoldEntries.reduce((acc, [, v]) => acc + v.length, 0)}:${headingFoldEntries.map(([k, v]) => `${k}=${v.join(",")}`).join("|")}`;
-  const key = `${state.lightTheme}|${state.darkTheme}|${state.themeCategory}|${state.alwaysOnTop}|${state.sidePanelWidth}|${state.sidePanelVisible}|${state.autoHideActivityBar}|${state.recentSearches.join(",")}|${state.editorFontFamily}|${state.editorFontSize}|${state.editorLineHeight}|${state.editorReadingWidth}|${state.editorPaper}|${state.editorRuleLines}|${state.editorFirstLineIndent}|${state.editorHighlightShortcut}|${state.uiScale}|${state.uiScaleUserSet}|${state.autoSaveEnabled}|${state.autoSaveDelay}|${state.outlineVisible}|${state.notesCollapsedFolderKeys.join(",")}|${state.notesUncategorizedExpanded}|${state.notesShowOnlyFolders}|${state.notesFoldersInitialCollapseDone}|${headingFoldKey}|${state.themeOverridesEnabled}|${state.customAccent ?? ""}|${state.customBgImage ?? ""}|${state.customBgDim}|${state.customBgBlur}|${state.customBgFit}`;
+  const key = `${state.lightTheme}|${state.darkTheme}|${state.themeCategory}|${state.alwaysOnTop}|${state.sidePanelWidth}|${state.sidePanelVisible}|${state.autoHideActivityBar}|${state.recentSearches.join(",")}|${state.editorFontFamily}|${state.editorFontSize}|${state.editorLineHeight}|${state.editorReadingWidth}|${state.editorPaper}|${state.editorRuleLines}|${state.editorFirstLineIndent}|${state.editorHighlightShortcut}|${state.uiScale}|${state.uiScaleUserSet}|${state.autoSaveEnabled}|${state.autoSaveDelay}|${state.outlineVisible}|${state.notesCollapsedFolderKeys.join(",")}|${state.notesUncategorizedExpanded}|${state.notesShowOnlyFolders}|${state.notesFoldersInitialCollapseDone}|${state.notesCollapseFoldersOnStartup}|${headingFoldKey}|${state.themeOverridesEnabled}|${state.customAccent ?? ""}|${state.customBgImage ?? ""}|${state.customBgDim}|${state.customBgBlur}|${state.customBgFit}`;
   if (key !== _prevPersistKey) {
     _prevPersistKey = key;
     saveThemeToStore();

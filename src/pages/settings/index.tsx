@@ -542,6 +542,10 @@ function DesktopSettingsPage() {
   const autoHideActivityBar = useAppStore((s) => s.autoHideActivityBar);
   const setAutoHideActivityBar = useAppStore((s) => s.setAutoHideActivityBar);
 
+  // 笔记侧边栏：每次启动默认收起所有文件夹
+  const collapseFoldersOnStartup = useAppStore((s) => s.notesCollapseFoldersOnStartup);
+  const setCollapseFoldersOnStartup = useAppStore((s) => s.setNotesCollapseFoldersOnStartup);
+
   // 笔记自动保存偏好
   const autoSaveEnabled = useAppStore((s) => s.autoSaveEnabled);
   const autoSaveDelay = useAppStore((s) => s.autoSaveDelay);
@@ -1278,6 +1282,19 @@ function DesktopSettingsPage() {
           <Switch
             checked={autoHideActivityBar}
             onChange={(on) => setAutoHideActivityBar(on)}
+          />
+        </div>
+        <div className="flex items-center justify-between py-1">
+          <div>
+            <div>笔记文件夹启动时默认收起</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              开启后，每次启动应用时笔记侧边栏的文件夹一律全部收起；
+              使用过程中的展开/收起会被记住，下次启动再次收起。关闭=跨重启记住上次的展开状态。
+            </Text>
+          </div>
+          <Switch
+            checked={collapseFoldersOnStartup}
+            onChange={(on) => setCollapseFoldersOnStartup(on)}
           />
         </div>
       </Card>

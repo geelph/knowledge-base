@@ -381,6 +381,28 @@ export function NotesPanel() {
     useAppStore.getState().markNotesFoldersInitialCollapseDone();
   }, [initialCollapseDone, folders.length, allFolderKeys]);
 
+  // 「每次启动默认收起所有文件夹」：开关开启时，每次应用启动后首次拿到文件夹，
+  // 把全部文件夹折叠一次；之后由用户操作驱动展开/折叠（本次会话内记忆，重启再次收起）。
+  // notesStartupCollapseApplied 是会话级标志（不持久化），应用重启后归 false → 再收一次。
+  const collapseFoldersOnStartup = useAppStore(
+    (s) => s.notesCollapseFoldersOnStartup,
+  );
+  const startupCollapseApplied = useAppStore(
+    (s) => s.notesStartupCollapseApplied,
+  );
+  useEffect(() => {
+    if (!collapseFoldersOnStartup) return;
+    if (startupCollapseApplied) return;
+    if (folders.length === 0) return;
+    useAppStore.getState().setNotesAllFoldersCollapsed(allFolderKeys);
+    useAppStore.getState().markNotesStartupCollapseApplied();
+  }, [
+    collapseFoldersOnStartup,
+    startupCollapseApplied,
+    folders.length,
+    allFolderKeys,
+  ]);
+
   const [creatingRoot, setCreatingRoot] = useState(false);
   const [newRootName, setNewRootName] = useState("");
 
