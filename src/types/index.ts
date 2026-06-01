@@ -186,16 +186,27 @@ export interface WikiLinkSuggestItem {
 export interface GraphNode {
   id: number;
   title: string;
+  /** 节点类型："note" = 笔记，"folder" = 文件夹 */
+  node_type: "note" | "folder";
   is_daily: boolean;
   is_pinned: boolean;
   tag_count: number;
   link_count: number;
+  /** 文件夹自定义颜色（仅 folder 节点可能有；note 恒为 null） */
+  color: string | null;
 }
 
 /** 图谱边 */
 export interface GraphEdge {
   source: number;
   target: number;
+  /**
+   * 边类型：
+   * - "link"         = wiki 双链（note → note，实线带箭头）
+   * - "folder_child" = 父子文件夹（folder → folder，虚线无箭头）
+   * - "folder_note"  = 文件夹归属（folder → note，虚线无箭头）
+   */
+  edge_type: "link" | "folder_child" | "folder_note";
 }
 
 /** 知识图谱数据 */

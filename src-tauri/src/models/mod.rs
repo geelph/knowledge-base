@@ -209,15 +209,22 @@ pub struct WikiLinkSuggestItem {
 
 // ─── 知识图谱 ─────────────────────────────────
 
-/// 图谱节点（笔记）
+/// 图谱节点（笔记 或 文件夹）
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphNode {
     pub id: i64,
     pub title: String,
+    /// 节点类型："note" = 笔记，"folder" = 文件夹
+    ///
+    /// 笔记与文件夹的自增 id 在各自的表里独立分配、可能相同，
+    /// 所以前端拼 G6 节点 id 时要按 node_type 加不同前缀（`n{id}` / `f{id}`）区分。
+    pub node_type: String,
     pub is_daily: bool,
     pub is_pinned: bool,
     pub tag_count: usize,
     pub link_count: usize,
+    /// 文件夹自定义颜色（仅 folder 节点可能有；note 恒为 None）
+    pub color: Option<String>,
 }
 
 /// 图谱边（链接关系）
@@ -225,6 +232,14 @@ pub struct GraphNode {
 pub struct GraphEdge {
     pub source: i64,
     pub target: i64,
+    /// 边类型：
+    /// - "link"        = wiki 双链（note → note，实线带箭头）
+    /// - "folder_child"= 父子文件夹（folder → folder，虚线无箭头）
+    /// - "folder_note" = 文件夹归属（folder → note，虚线无箭头）
+    ///
+    /// source/target 的真实归属（note 还是 folder）由 edge_type 决定，
+    /// 前端据此给两端拼对应的 `n{id}` / `f{id}` 前缀。
+    pub edge_type: String,
 }
 
 /// 知识图谱数据

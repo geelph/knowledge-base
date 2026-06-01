@@ -290,6 +290,8 @@ impl super::Database {
             is_daily: bool,
             is_pinned: bool,
             tag_count: usize,
+            /// 笔记所属文件夹（用于建 folder→note 归属边）；根层笔记为 None
+            folder_id: Option<i64>,
         }
 
         // 用 LEFT JOIN + GROUP BY 一次性拿到 tag_count，替代原来每行一条相关子查询（N+1）。
@@ -298,7 +300,7 @@ impl super::Database {
         // 对隐藏笔记的 [[wiki link]] 自动成为"断边"，图里既无节点也无指向它的边，达到隐身效果。
         let mut stmt = conn.prepare(
             "SELECT n.id, n.title, n.content, n.is_daily, n.is_pinned,
-                    COUNT(nt.tag_id) AS tag_count
+                    COUNT(nt.tag_id) AS tag_count, n.folder_id
              FROM notes n
              LEFT JOIN note_tags nt ON nt.note_id = n.id
              WHERE n.is_deleted = 0 AND n.is_hidden = 0
@@ -314,6 +316,7 @@ impl super::Database {
                     is_daily: r.get(3)?,
                     is_pinned: r.get(4)?,
                     tag_count: r.get::<_, i64>(5)? as usize,
+                    folder_id: r.get(6)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -355,24 +358,90 @@ impl super::Database {
                 edges.push(GraphEdge {
                     source: r.id,
                     target: target_id,
+                    edge_type: "link".to_string(),
                 });
                 *link_count.entry(r.id).or_insert(0) += 1;
                 *link_count.entry(target_id).or_insert(0) += 1;
             }
         }
 
-        // 组装节点（link_count 取自实时统计）
-        let nodes: Vec<GraphNode> = rows
+        // ─── note 节点（link_count 取自实时统计）──────────────────
+        // 先留存每条笔记的归属文件夹，供下方建 folder→note 边（rows 随后被消耗）
+        let note_folder: Vec<(i64, i64)> = rows
+            .iter()
+            .filter_map(|r| r.folder_id.map(|fid| (r.id, fid)))
+            .collect();
+
+        let mut nodes: Vec<GraphNode> = rows
             .into_iter()
             .map(|r| GraphNode {
                 link_count: link_count.get(&r.id).copied().unwrap_or(0),
                 id: r.id,
                 title: r.title,
+                node_type: "note".to_string(),
                 is_daily: r.is_daily,
                 is_pinned: r.is_pinned,
                 tag_count: r.tag_count,
+                color: None,
             })
             .collect();
+
+        // ─── folder 节点 + 层级边 ─────────────────────────────
+        // 文件夹嵌套是用户天然组织好的结构，把它纳入图谱让"没双链就是一盘散点"的
+        // 老问题消失：folder→folder 父子边、folder→note 归属边（前端渲染为虚线无箭头）。
+        struct FolderRow {
+            id: i64,
+            name: String,
+            parent_id: Option<i64>,
+            color: Option<String>,
+        }
+        let mut fstmt = conn.prepare("SELECT id, name, parent_id, color FROM folders")?;
+        let folders: Vec<FolderRow> = fstmt
+            .query_map([], |r| {
+                Ok(FolderRow {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    parent_id: r.get(2)?,
+                    color: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let folder_ids: HashSet<i64> = folders.iter().map(|f| f.id).collect();
+
+        for f in &folders {
+            nodes.push(GraphNode {
+                id: f.id,
+                title: f.name.clone(),
+                node_type: "folder".to_string(),
+                is_daily: false,
+                is_pinned: false,
+                tag_count: 0,
+                link_count: 0,
+                color: f.color.clone(),
+            });
+            // 父子文件夹边：父存在才建，避免悬挂边
+            if let Some(pid) = f.parent_id {
+                if folder_ids.contains(&pid) {
+                    edges.push(GraphEdge {
+                        source: pid,
+                        target: f.id,
+                        edge_type: "folder_child".to_string(),
+                    });
+                }
+            }
+        }
+
+        // folder→note 归属边：仅当目标文件夹仍存在时建
+        for (note_id, folder_id) in note_folder {
+            if folder_ids.contains(&folder_id) {
+                edges.push(GraphEdge {
+                    source: folder_id,
+                    target: note_id,
+                    edge_type: "folder_note".to_string(),
+                });
+            }
+        }
 
         Ok(GraphData { nodes, edges })
     }

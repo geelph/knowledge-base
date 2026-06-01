@@ -28,37 +28,46 @@ export default function GraphPage() {
   const [layout, setLayout] = useState<string>("d3-force");
 
   // ─── 节点右键菜单 ────────────────────────────
-  const ctx = useContextMenu<{ nodeId: string; title: string }>();
+  // gid = G6 节点 id（带 n/f 前缀）；realId = 数据库真实 id；nodeType 决定菜单项
+  const ctx = useContextMenu<{
+    gid: string;
+    realId: number;
+    nodeType: "note" | "folder";
+    title: string;
+  }>();
 
   const menuItems: ContextMenuEntry[] = useMemo(() => {
     const p = ctx.state.payload;
     if (!p) return [];
-    return [
-      {
+    const items: ContextMenuEntry[] = [];
+    // 文件夹节点没有对应笔记，不显示"打开笔记"
+    if (p.nodeType === "note") {
+      items.push({
         key: "open",
         label: "打开笔记",
         icon: <ExternalLink size={13} />,
         onClick: () => {
           ctx.close();
-          navigate(`/notes/${p.nodeId}`);
+          navigate(`/notes/${p.realId}`);
         },
+      });
+    }
+    items.push({
+      key: "focus",
+      label: "居中此节点",
+      icon: <Crosshair size={13} />,
+      onClick: () => {
+        ctx.close();
+        // G6 v5：把指定节点移到视图中心
+        try {
+          graphRef.current?.focusElement(p.gid);
+        } catch {
+          // focusElement 可能在某些版本叫 focus；失败时退到 fitCenter
+          graphRef.current?.fitCenter();
+        }
       },
-      {
-        key: "focus",
-        label: "居中此节点",
-        icon: <Crosshair size={13} />,
-        onClick: () => {
-          ctx.close();
-          // G6 v5：把指定节点移到视图中心
-          try {
-            graphRef.current?.focusElement(p.nodeId);
-          } catch {
-            // focusElement 可能在某些版本叫 focus；失败时退到 fitCenter
-            graphRef.current?.fitCenter();
-          }
-        },
-      },
-    ];
+    });
+    return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx.state.payload, navigate]);
 
@@ -103,21 +112,28 @@ export default function GraphPage() {
       graphRef.current = null;
     }
 
+    // note 节点 id 加 `n` 前缀、folder 加 `f` 前缀——两表自增 id 可能相同，必须区分
     const nodes = graphData.nodes.map((n) => ({
-      id: String(n.id),
+      id: (n.node_type === "folder" ? "f" : "n") + n.id,
       data: {
         label: n.title,
+        nodeType: n.node_type,
+        realId: n.id,
         isDaily: n.is_daily,
         isPinned: n.is_pinned,
         tagCount: n.tag_count,
         linkCount: n.link_count,
+        folderColor: n.color,
       },
     }));
 
+    // 按 edge_type 给两端拼对应前缀：
+    //   link  n→n      folder_child  f→f      folder_note  f→n
     const edges = graphData.edges.map((e, i) => ({
       id: `edge-${i}`,
-      source: String(e.source),
-      target: String(e.target),
+      source: (e.edge_type === "link" ? "n" : "f") + e.source,
+      target: (e.edge_type === "folder_child" ? "f" : "n") + e.target,
+      data: { edgeType: e.edge_type },
     }));
 
     const graph = new Graph({
@@ -131,29 +147,42 @@ export default function GraphPage() {
       },
       data: { nodes, edges },
       node: {
+        // 文件夹用方形（rect）、笔记用圆形（circle）——形状先于颜色区分两类节点
+        type: (d: any) => (d.data?.nodeType === "folder" ? "rect" : "circle"),
         style: {
           size: (d: any) => {
+            // 文件夹固定尺寸；笔记按链接数放大
+            if (d.data?.nodeType === "folder") return 30;
             const linkCount = d.data?.linkCount || 0;
             return Math.max(20, Math.min(52, 20 + linkCount * 6));
           },
           fill: (d: any) => {
+            // 文件夹优先用自定义颜色，否则中性填充
+            if (d.data?.nodeType === "folder")
+              return d.data?.folderColor || token.colorFillSecondary;
             if (d.data?.isDaily) return token.colorWarning;
             if (d.data?.isPinned) return token.colorError;
             if ((d.data?.linkCount || 0) > 3) return token.colorPrimary;
             return token.colorPrimaryBg;
           },
           stroke: (d: any) => {
+            if (d.data?.nodeType === "folder")
+              return d.data?.folderColor || token.colorBorder;
             if (d.data?.isDaily) return token.colorWarningBorder;
             if (d.data?.isPinned) return token.colorErrorBorder;
             return token.colorPrimaryBorder;
           },
+          // 文件夹方块加圆角；圆形节点 radius 无副作用
+          radius: (d: any) => (d.data?.nodeType === "folder" ? 6 : 0),
           lineWidth: 2,
           labelText: (d: any) => {
-            const label = d.data?.label || "";
-            return label.length > 10 ? label.slice(0, 10) + "..." : label;
+            const raw = d.data?.label || "";
+            const label = d.data?.nodeType === "folder" ? `📁 ${raw}` : raw;
+            return label.length > 12 ? label.slice(0, 12) + "..." : label;
           },
           labelFontSize: 13,
-          labelFontWeight: 500,
+          labelFontWeight: (d: any) =>
+            d.data?.nodeType === "folder" ? 600 : 500,
           labelFill: token.colorText,
           labelPlacement: "bottom",
           labelOffsetY: 6,
@@ -161,10 +190,16 @@ export default function GraphPage() {
       },
       edge: {
         style: {
-          stroke: token.colorPrimary,
-          strokeOpacity: 0.45,
-          lineWidth: 1.5,
-          endArrow: true,
+          // wiki 双链：实线带箭头、主题色；层级边：浅色虚线无箭头
+          stroke: (d: any) =>
+            d.data?.edgeType === "link"
+              ? token.colorPrimary
+              : token.colorTextQuaternary,
+          strokeOpacity: (d: any) => (d.data?.edgeType === "link" ? 0.45 : 0.7),
+          lineWidth: (d: any) => (d.data?.edgeType === "link" ? 1.5 : 1),
+          lineDash: (d: any) =>
+            d.data?.edgeType === "link" ? undefined : [4, 4],
+          endArrow: (d: any) => d.data?.edgeType === "link",
           endArrowSize: 8,
           endArrowFill: token.colorPrimary,
         },
@@ -197,11 +232,14 @@ export default function GraphPage() {
 
     graph.render();
 
-    // 双击节点跳转到笔记
+    // 双击节点跳转到笔记（文件夹节点无对应笔记，双击忽略）
     graph.on("node:dblclick", (evt: any) => {
-      const nodeId = evt.target?.id;
-      if (nodeId) {
-        navigate(`/notes/${nodeId}`);
+      const gid = String(evt.target?.id ?? "");
+      const node = graphData.nodes.find(
+        (n) => (n.node_type === "folder" ? "f" : "n") + n.id === gid,
+      );
+      if (node && node.node_type === "note") {
+        navigate(`/notes/${node.id}`);
       }
     });
 
@@ -211,13 +249,23 @@ export default function GraphPage() {
       const native: MouseEvent | undefined =
         evt?.nativeEvent ?? evt?.originalEvent ?? evt?.event;
       native?.preventDefault?.();
-      const nodeId = String(evt?.target?.id ?? "");
-      if (!nodeId) return;
-      const node = graphData.nodes.find((n) => String(n.id) === nodeId);
-      const title = node?.title ?? "";
+      const gid = String(evt?.target?.id ?? "");
+      if (!gid) return;
+      const node = graphData.nodes.find(
+        (n) => (n.node_type === "folder" ? "f" : "n") + n.id === gid,
+      );
+      if (!node) return;
       const x = native?.clientX ?? evt?.client?.x ?? 0;
       const y = native?.clientY ?? evt?.client?.y ?? 0;
-      ctx.open({ clientX: x, clientY: y }, { nodeId, title });
+      ctx.open(
+        { clientX: x, clientY: y },
+        {
+          gid,
+          realId: node.id,
+          nodeType: node.node_type,
+          title: node.title,
+        },
+      );
     });
 
     graphRef.current = graph;
@@ -366,7 +414,19 @@ export default function GraphPage() {
           />
           置顶笔记
         </span>
-        <span style={{ marginLeft: "auto" }}>双击节点打开笔记</span>
+        <span className="flex items-center gap-1">
+          <span
+            className="inline-block w-2.5 h-2.5 rounded-sm"
+            style={{
+              background: token.colorFillSecondary,
+              border: `1px solid ${token.colorBorder}`,
+            }}
+          />
+          文件夹
+        </span>
+        <span style={{ marginLeft: "auto" }}>
+          双击笔记打开 · 虚线为文件夹归属
+        </span>
       </div>
 
       {/* 图谱画布 */}
