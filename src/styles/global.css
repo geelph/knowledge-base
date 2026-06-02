@@ -1202,6 +1202,26 @@ body,
   width: 100% !important;
   height: auto !important;
 }
+/* ── 未选中态图片溢出修复 ──
+   tiptap-extension-resize-image 的容器 `position: relative` 只在图片「选中」时
+   才加（和虚线选中框一起 setAttribute）；未选中态容器只剩 `width: 1200px`，
+   上面那条依赖 `position: relative` 的规则就不命中 → 保存重进（图片默认未选中）
+   宽图把编辑框撑破。这里改用 `:has(> img)` 精确锁定「直接包着 img 的容器 div」，
+   不依赖选中态，也排除选中态那两个 position:absolute 的浮层（工具条/手柄不含 img）。 */
+[contenteditable="false"][draggable="true"] div[style*="width"]:has(> img),
+.tiptap div[style*="width"]:has(> img),
+.ProseMirror div[style*="width"]:has(> img) {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box;
+}
+[contenteditable="false"][draggable="true"] div[style*="width"]:has(> img) > img,
+.tiptap div[style*="width"]:has(> img) > img,
+.ProseMirror div[style*="width"]:has(> img) > img {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
+}
 /* 普通 img / figure：不超出即可 */
 .tiptap img, .ProseMirror img, .tiptap-content img,
 .tiptap figure, .ProseMirror figure, .tiptap-content figure {
