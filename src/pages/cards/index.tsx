@@ -494,6 +494,9 @@ function ListTab({ onChanged }: { onChanged: () => void }) {
         }}
       />
       <CardEditModal
+        // key 必须落在持有 useForm 的组件上：只给内部 <Modal> 加 key 无法重建
+        // form 仓库，导致打开下一张卡时仓库残留上一张的 front/back（编辑串内容）。
+        key={editing ? `edit-${editing.id}` : "edit-empty"}
         open={!!editing}
         editing={editing}
         onClose={() => setEditing(null)}
@@ -521,11 +524,10 @@ function CardEditModal({
   const [saving, setSaving] = useState(false);
 
   /**
-   * 关键：destroyOnHidden + form.setFieldsValue 在 useEffect 里有时序问题
-   * （Form 子树重新挂载前 setFieldsValue 没生效）。改用 Modal 的 key
-   * 强制 remount + Form initialValues 初始化，是 antd 推荐的稳妥写法。
+   * 表单初值。本组件由父级 `key={edit-<id>}` 按卡片整组重建（含 useForm
+   * 实例），所以每次打开都是全新 form 仓库，initialValues 能可靠生效，
+   * 不会出现「打开 B 却显示上一张 A」的串内容问题。
    */
-  const modalKey = editing ? `edit-${editing.id}` : "create";
   const initialValues = {
     front: editing?.front ?? "",
     back: editing?.back ?? "",
@@ -554,7 +556,6 @@ function CardEditModal({
 
   return (
     <Modal
-      key={modalKey}
       open={open}
       title={editing ? "编辑卡片" : "新建卡片"}
       onCancel={onClose}
