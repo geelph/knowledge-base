@@ -858,22 +858,27 @@ impl super::Database {
             .conn
             .lock()
             .map_err(|e| AppError::Custom(e.to_string()))?;
-        let total_todo: usize =
-            conn.query_row("SELECT COUNT(*) FROM tasks WHERE status = 0", [], |row| {
-                row.get(0)
-            })?;
-        let total_done: usize =
-            conn.query_row("SELECT COUNT(*) FROM tasks WHERE status = 1", [], |row| {
-                row.get(0)
-            })?;
+        // v43 起删除任务改为软删墓碑（is_deleted=1，行不物理删除），列表查询都带
+        // `is_deleted = 0` 过滤。统计查询必须同样排除墓碑行，否则已删任务仍被计入，
+        // 导致侧边栏待办红色 Badge / 首页待办速览的数字减不掉（删完重启仍显示旧值）。
+        let total_todo: usize = conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE status = 0 AND is_deleted = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        let total_done: usize = conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE status = 1 AND is_deleted = 0",
+            [],
+            |row| row.get(0),
+        )?;
         let urgent_todo: usize = conn.query_row(
-            "SELECT COUNT(*) FROM tasks WHERE status = 0 AND priority = 0",
+            "SELECT COUNT(*) FROM tasks WHERE status = 0 AND priority = 0 AND is_deleted = 0",
             [],
             |row| row.get(0),
         )?;
         // 纯日期('YYYY-MM-DD') 视作当天 23:59:59；带时分的按实际时刻比较
         let overdue: usize = conn.query_row(
-            "SELECT COUNT(*) FROM tasks WHERE status = 0 AND due_date IS NOT NULL
+            "SELECT COUNT(*) FROM tasks WHERE status = 0 AND is_deleted = 0 AND due_date IS NOT NULL
                 AND datetime(CASE WHEN LENGTH(due_date) <= 10
                                   THEN due_date || ' 23:59:59'
                                   ELSE due_date END)
@@ -882,7 +887,7 @@ impl super::Database {
             |row| row.get(0),
         )?;
         let due_today: usize = conn.query_row(
-            "SELECT COUNT(*) FROM tasks WHERE status = 0 AND due_date IS NOT NULL
+            "SELECT COUNT(*) FROM tasks WHERE status = 0 AND is_deleted = 0 AND due_date IS NOT NULL
                 AND DATE(due_date) = DATE('now','localtime')",
             [],
             |row| row.get(0),
@@ -1160,4 +1165,60 @@ fn insert_link(conn: &Connection, task_id: i64, input: &TaskLinkInput) -> Result
         params![task_id, input.kind, input.target, input.label],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::database::Database;
+    use crate::models::CreateTaskInput;
+
+    fn fresh() -> Database {
+        Database::init(":memory:").unwrap()
+    }
+
+    /// 最小任务入参；priority=0 表示「紧急」（即喂给侧边栏红色 Badge 的 urgent_todo）。
+    fn urgent_task(title: &str) -> CreateTaskInput {
+        CreateTaskInput {
+            title: title.into(),
+            description: None,
+            priority: Some(0), // 0 = 紧急
+            important: None,
+            due_date: None,
+            remind_before_minutes: None,
+            links: None,
+            repeat_kind: None,
+            repeat_interval: None,
+            repeat_weekdays: None,
+            repeat_until: None,
+            repeat_count: None,
+            source_batch_id: None,
+            category_id: None,
+            parent_task_id: None,
+            project_id: None,
+            start_date: None,
+        }
+    }
+
+    /// 回归：v43 软删墓碑（is_deleted=1）必须从 get_task_stats 中剔除。
+    /// 否则用户删除任务后，侧边栏待办红色 Badge 的数字减不掉，重启仍显示旧值。
+    #[test]
+    fn deleted_tasks_excluded_from_stats() {
+        let db = fresh();
+        let id1 = db.create_task(urgent_task("测试任务1")).unwrap();
+        db.create_task(urgent_task("测试任务2")).unwrap();
+
+        // 初始：两条未完成 + 紧急
+        let s = db.get_task_stats().unwrap();
+        assert_eq!(s.total_todo, 2);
+        assert_eq!(s.urgent_todo, 2);
+
+        // 软删一条 → 统计应立即减 1（墓碑行不计入）
+        assert!(db.delete_task(id1).unwrap());
+        let s = db.get_task_stats().unwrap();
+        assert_eq!(s.total_todo, 1, "软删任务不应再计入 total_todo");
+        assert_eq!(
+            s.urgent_todo, 1,
+            "软删任务不应再计入 urgent_todo（侧边栏待办 Badge 的数据源）"
+        );
+    }
 }
