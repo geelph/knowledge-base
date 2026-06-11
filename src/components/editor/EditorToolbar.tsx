@@ -23,6 +23,8 @@ import {
   ListTodo,
   Quote,
   CodeSquare,
+  Sigma,
+  Calculator,
   Minus,
   Undo2,
   Redo2,
@@ -806,6 +808,43 @@ export function EditorToolbar({ editor, noteId, ensureNoteId, onOpenSearch }: To
                     },
                   ],
                 })
+                .run(),
+          },
+        ],
+      },
+      // 公式（LaTeX / KaTeX）：下拉选行内 / 块级，插入空公式占位并聚焦，
+      // 用户直接输入 LaTeX；不用再手敲 $ / $$，提升可发现性（斜杠菜单也有同款项）。
+      {
+        icon: (
+          <span className="inline-flex items-center gap-0.5">
+            <Sigma size={15} />
+            <ChevronDown size={11} style={{ opacity: 0.6 }} />
+          </span>
+        ),
+        title: "公式（LaTeX）",
+        isActive: () =>
+          editor.isActive("inlineMath") || editor.isActive("blockMath"),
+        dropdownItems: [
+          {
+            key: "math-inline",
+            icon: <Calculator size={14} />,
+            label: "行内公式 $…$",
+            onClick: () =>
+              editor
+                .chain()
+                .focus()
+                .insertContent({ type: "inlineMath", attrs: { latex: "" } })
+                .run(),
+          },
+          {
+            key: "math-block",
+            icon: <Sigma size={14} />,
+            label: "块级公式 $$…$$",
+            onClick: () =>
+              editor
+                .chain()
+                .focus()
+                .insertContent({ type: "blockMath", attrs: { latex: "" } })
                 .run(),
           },
         ],
