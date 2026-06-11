@@ -8,6 +8,9 @@ import {
   CheckOutlined,
   AppstoreOutlined,
   CodeOutlined,
+  KeyOutlined,
+  CloudServerOutlined,
+  CameraOutlined,
 } from "@ant-design/icons";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -24,6 +27,9 @@ export function RecommendCards() {
   const [frameworkCopied, setFrameworkCopied] = useState(false);
   const [workstationOpen, setWorkstationOpen] = useState(false);
   const [aicoderOpen, setAicoderOpen] = useState(false);
+  const [sigilOpen, setSigilOpen] = useState(false);
+  const [reeveOpen, setReeveOpen] = useState(false);
+  const [agileshotOpen, setAgileshotOpen] = useState(false);
 
   const cardStyle: React.CSSProperties = {
     padding: "12px 16px",
@@ -114,6 +120,66 @@ export function RecommendCards() {
           <br />
           <Text type="secondary" style={{ fontSize: 11 }}>
             多 AI 编码工具一站式管理 · 移动端实时联动
+          </Text>
+        </div>
+        <RightOutlined style={{ fontSize: 11, color: "var(--ant-color-text-quaternary)" }} />
+      </div>
+
+      {/* 推荐：Sigil */}
+      <div
+        onClick={() => setSigilOpen(true)}
+        style={cardStyle}
+        onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--ant-color-primary)")}
+        onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--ant-color-border)")}
+      >
+        <KeyOutlined style={{ fontSize: 20, color: "var(--ant-color-primary)" }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Text strong style={{ fontSize: 13 }}>
+            Sigil · AI 凭据金库
+          </Text>
+          <br />
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            让 AI 帮你干活，但永远拿不到你的密钥
+          </Text>
+        </div>
+        <RightOutlined style={{ fontSize: 11, color: "var(--ant-color-text-quaternary)" }} />
+      </div>
+
+      {/* 推荐：Reeve */}
+      <div
+        onClick={() => setReeveOpen(true)}
+        style={cardStyle}
+        onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--ant-color-primary)")}
+        onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--ant-color-border)")}
+      >
+        <CloudServerOutlined style={{ fontSize: 20, color: "var(--ant-color-primary)" }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Text strong style={{ fontSize: 13 }}>
+            Reeve · 服务器庄园总管
+          </Text>
+          <br />
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            你持钥，AI 借道 —— AI 操作服务器却拿不到密码私钥
+          </Text>
+        </div>
+        <RightOutlined style={{ fontSize: 11, color: "var(--ant-color-text-quaternary)" }} />
+      </div>
+
+      {/* 推荐：AgileShot */}
+      <div
+        onClick={() => setAgileshotOpen(true)}
+        style={cardStyle}
+        onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--ant-color-primary)")}
+        onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--ant-color-border)")}
+      >
+        <CameraOutlined style={{ fontSize: 20, color: "var(--ant-color-primary)" }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Text strong style={{ fontSize: 13 }}>
+            AgileShot · 截图标注工具
+          </Text>
+          <br />
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            AI 时代的桌面截图与标注工具
           </Text>
         </div>
         <RightOutlined style={{ fontSize: 11, color: "var(--ant-color-text-quaternary)" }} />
@@ -379,6 +445,237 @@ export function RecommendCards() {
             }}
           >
             {frameworkCopied ? "已复制!" : "咨询: 770492966"}
+          </Button>
+        </div>
+      </Modal>
+
+      {/* Sigil 详情弹窗 */}
+      <Modal
+        title={null}
+        open={sigilOpen}
+        onCancel={() => setSigilOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setSigilOpen(false)}>关闭</Button>,
+          <Button key="site" type="primary" onClick={() => openUrl("https://sigil.ruoyi.plus")}>
+            访问官网
+          </Button>,
+        ]}
+        width={520}
+      >
+        <div style={{ textAlign: "center", paddingTop: 8, paddingBottom: 12 }}>
+          <KeyOutlined style={{ fontSize: 36, color: "var(--ant-color-primary)" }} />
+          <Title level={4} style={{ margin: "12px 0 4px" }}>
+            Sigil · AI 凭据金库
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+            MCP 协议代理 —— AI 用得到、看不到明文
+          </Paragraph>
+          <div style={{ display: "flex", justifyContent: "center", gap: 24 }}>
+            {[
+              ["AES-256", "加密金库"],
+              ["MCP", "标准协议"],
+              ["100%", "本地存储"],
+            ].map(([num, label]) => (
+              <div key={label} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ant-color-primary)" }}>
+                  {num}
+                </div>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {label}
+                </Text>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginBottom: 8 }}>
+            <Tag color="orange">Tauri 2.x</Tag>
+            <Tag color="blue">Rust</Tag>
+            <Tag color="geekblue">MCP</Tag>
+            <Tag color="green">AES-256-GCM</Tag>
+            <Tag color="purple">Local-first</Tag>
+          </div>
+
+          {[
+            ["加密金库 · 密钥永不离手", "系统密钥环 + AES-256-GCM + SQLCipher 整库加密；AI 通过 MCP 调用能力，凭据只在 Sigil 内部使用，结果脱敏返回"],
+            ["MCP 标准协议", "Claude Code / Cursor / Cline / Zed 等 MCP 客户端原生支持，一键接入"],
+            ["内置能力 + 用户可扩展", "Git push、Gitee/GitHub/GitCode 仓库操作、HTTP API 代理、数据库查询；UI 配置 HTTP 模板能力，无需编程"],
+            ["审计日志 + 范围控制", "每次凭据访问留痕可追溯；每个凭据可限定只允许哪些能力使用"],
+          ].map(([title, desc]) => (
+            <div
+              key={title}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 6,
+                background: "var(--ant-color-bg-layout)",
+                border: "1px solid var(--ant-color-border)",
+              }}
+            >
+              <Text strong style={{ fontSize: 13 }}>
+                {title}
+              </Text>
+              <br />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {desc}
+              </Text>
+            </div>
+          ))}
+        </div>
+      </Modal>
+
+      {/* Reeve 详情弹窗 */}
+      <Modal
+        title={null}
+        open={reeveOpen}
+        onCancel={() => setReeveOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setReeveOpen(false)}>关闭</Button>,
+          <Button key="site" type="primary" onClick={() => openUrl("https://reeve.ruoyi.plus")}>
+            访问官网
+          </Button>,
+        ]}
+        width={520}
+      >
+        <div style={{ textAlign: "center", paddingTop: 8, paddingBottom: 12 }}>
+          <CloudServerOutlined style={{ fontSize: 36, color: "var(--ant-color-primary)" }} />
+          <Title level={4} style={{ margin: "12px 0 4px" }}>
+            Reeve · 服务器庄园总管
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+            SSH 服务器管理 + 受控 AI 接入（MCP）
+          </Paragraph>
+          <div style={{ display: "flex", justifyContent: "center", gap: 24 }}>
+            {[
+              ["持钥借道", "凭据不出本机"],
+              ["四重关卡", "策略+审批+审计"],
+              ["127.0.0.1", "绝不公网监听"],
+            ].map(([num, label]) => (
+              <div key={label} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ant-color-primary)" }}>
+                  {num}
+                </div>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {label}
+                </Text>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginBottom: 8 }}>
+            <Tag color="orange">Tauri 2</Tag>
+            <Tag color="blue">Rust</Tag>
+            <Tag color="geekblue">MCP</Tag>
+            <Tag color="green">SSH</Tag>
+            <Tag color="purple">AES-256-GCM</Tag>
+          </div>
+
+          {[
+            ["一流 SSH 客户端", "多标签终端 · 服务器清单 · SFTP · 命令片段，可替代 Xshell / Termius / FinalShell"],
+            ["AI 安全跳板", "Claude Code / Codex / claude.ai 通过 MCP 操作服务器；AI 只看到服务器别名，看不到账号 / 密码 / 私钥"],
+            ["四重安全关卡", "全局总开关 → 每服务器分级策略（只读 / 审批 / 白名单）→ 危险命令黑名单 → 全量审计；MCP 仅监听 127.0.0.1"],
+            ["越用越懂你", "以项目目录为单位沉淀经验库 / Runbook / 可配置技能（CLAUDE.md + .reeve/）"],
+          ].map(([title, desc]) => (
+            <div
+              key={title}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 6,
+                background: "var(--ant-color-bg-layout)",
+                border: "1px solid var(--ant-color-border)",
+              }}
+            >
+              <Text strong style={{ fontSize: 13 }}>
+                {title}
+              </Text>
+              <br />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {desc}
+              </Text>
+            </div>
+          ))}
+        </div>
+      </Modal>
+
+      {/* AgileShot 详情弹窗 */}
+      <Modal
+        title={null}
+        open={agileshotOpen}
+        onCancel={() => setAgileshotOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setAgileshotOpen(false)}>关闭</Button>,
+          <Button key="site" type="primary" onClick={() => openUrl("https://agileshot.ruoyi.plus")}>
+            访问官网
+          </Button>,
+        ]}
+        width={520}
+      >
+        <div style={{ textAlign: "center", paddingTop: 8, paddingBottom: 12 }}>
+          <CameraOutlined style={{ fontSize: 36, color: "var(--ant-color-primary)" }} />
+          <Title level={4} style={{ margin: "12px 0 4px" }}>
+            AgileShot · 截图标注工具
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+            截图 · 标注 · 钉图 · OCR · 录屏 · MCP 扩展，一体化
+          </Paragraph>
+          <div style={{ display: "flex", justifyContent: "center", gap: 24 }}>
+            {[
+              ["11 种", "标注工具"],
+              ["AI 标注", "OCR / 翻译"],
+              ["MCP", "Claude / Cursor"],
+            ].map(([num, label]) => (
+              <div key={label} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ant-color-primary)" }}>
+                  {num}
+                </div>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {label}
+                </Text>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginBottom: 8 }}>
+            <Tag color="orange">C++20</Tag>
+            <Tag color="blue">Qt 6</Tag>
+            <Tag color="green">Agile-Qt</Tag>
+            <Tag color="geekblue">MCP</Tag>
+            <Tag color="purple">Windows</Tag>
+          </div>
+
+          {[
+            ["11 种标注工具开箱即用", "矩形 / 椭圆 / 箭头 / 文字 / 马赛克 / 模糊 / 计数 / 高亮 / 图章…，撤销重做完整支持"],
+            ["AI 智能标注", "一键 OCR、翻译、代码解释；截图即问 AI"],
+            ["MCP Server", "让 Claude Desktop / Cursor 直接在屏幕上工作（9 个 MCP 工具）"],
+            ["钉图 / 录屏 / 取色", "钉图鼠标穿透、多张同存、独立缩放；录屏 + GIF；取色器 + 历史全文搜索"],
+          ].map(([title, desc]) => (
+            <div
+              key={title}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 6,
+                background: "var(--ant-color-bg-layout)",
+                border: "1px solid var(--ant-color-border)",
+              }}
+            >
+              <Text strong style={{ fontSize: 13 }}>
+                {title}
+              </Text>
+              <br />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {desc}
+              </Text>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          <Button type="link" size="small" onClick={() => openUrl("https://www.bilibili.com/video/BV1uQ7k6nEvq")}>
+            B站介绍
           </Button>
         </div>
       </Modal>
