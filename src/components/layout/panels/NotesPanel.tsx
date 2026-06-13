@@ -1315,6 +1315,21 @@ export function NotesPanel() {
             close();
           },
         },
+        // 单篇「移动到…」：复用批量移动的 TreeSelect 弹窗。多选(>1)时顶部已有批量
+        // 「移动选中的 N 篇到…」入口，故这里仅在非多选时展示，避免两个移动项并存造成歧义。
+        ...(!inMultiSelect
+          ? [
+              {
+                key: "move-to",
+                icon: <FolderOpen size={14} />,
+                label: "移动到…",
+                onClick: () => {
+                  close();
+                  openMoveModalForNote(noteId);
+                },
+              } as ContextMenuEntry,
+            ]
+          : []),
         {
           key: "copy-wiki",
           icon: <Copy size={14} />,
@@ -1955,6 +1970,14 @@ export function NotesPanel() {
       .filter((id) => Number.isFinite(id));
     if (ids.length === 0) return;
     setMoveModalIds(ids);
+    setMoveTargetValue(null);
+    setMoveModalOpen(true);
+  }
+
+  /** 打开「移动到…」弹窗，仅针对单篇笔记（单篇右键菜单用，复用同一弹窗 + submitMove） */
+  function openMoveModalForNote(noteId: number) {
+    if (!Number.isFinite(noteId)) return;
+    setMoveModalIds([noteId]);
     setMoveTargetValue(null);
     setMoveModalOpen(true);
   }
