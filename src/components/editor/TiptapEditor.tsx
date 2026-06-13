@@ -1417,7 +1417,13 @@ export function TiptapEditor({
         // 时 hard break 序列化为 "  \n"（两空格+换行），下次读取还原相同视觉。
         breaks: true,
         transformPastedText: true,
-        transformCopiedText: false,
+        // 复制时纯文本(text/plain)走 markdown 序列化，而非 ProseMirror 默认的
+        // textBetween(..., "\n\n")。默认(false)会丢掉列表序号、块间塞 \n\n 空行 →
+        // 复制有序列表粘出来变成"无序号 + 多空行"。改 true 后有序列表复制成
+        // "1. … / 2. …"(tightLists 紧凑无空行)，所见即所得。
+        // 代价：复制加粗/标题/链接等富文本的纯文本会带 markdown 符号(** # []())；
+        // 应用内富文本粘贴走 html/PM-slice，不经此路径、不受影响。
+        transformCopiedText: true,
       }),
       // 必须放在 Markdown 之后：onBeforeCreate 时依赖 markdown.parser 已初始化
       AllowFileLink,
