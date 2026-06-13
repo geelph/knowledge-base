@@ -705,12 +705,12 @@ export function AppLayout() {
                 onClick={() => setPaletteOpen(true)}
               />
             </Tooltip>
+            <SyncStatusButton />
             <Dropdown menu={{ items: themeMenuItems, onClick: handleThemeSelect, selectedKeys: [activeTheme] }} trigger={["click"]}>
               <Tooltip title="切换主题">
                 <Button type="text" icon={<Palette size={16} />} />
               </Tooltip>
             </Dropdown>
-            <SyncStatusButton />
             <Button
               type="text"
               icon={<SettingOutlined />}

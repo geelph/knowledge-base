@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Tooltip, App as AntdApp } from "antd";
-import { RefreshCw } from "lucide-react";
+import { ArrowDownUp } from "lucide-react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { syncV1Api } from "@/lib/api";
 import type { SyncBackend } from "@/types";
@@ -95,7 +95,7 @@ export function SyncStatusButton() {
     <Tooltip title={tooltipTitle} placement="bottom">
       <Button
         type="text"
-        icon={<RefreshCw size={16} className={syncing ? "animate-spin" : ""} />}
+        icon={<ArrowDownUp size={16} className={syncing ? "kb-update-float" : ""} />}
         onClick={handleClick}
         loading={false}
         disabled={syncing}
