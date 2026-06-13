@@ -28,23 +28,46 @@ const PRINT_FRAME_ID_PREFIX = "kb-pdf-print-frame-";
  */
 export function printHtmlAsPdf(html: string, title: string): Promise<void> {
   return new Promise((resolve, reject) => {
+    // 进场先清掉可能残留的旧打印 iframe：上一次打印若 afterprint 未触发（WebView2 常见），
+    // 旧 iframe 会一直挂在主文档里拖慢/卡死渲染，多次打印叠加更严重。打印前统一清场。
+    document
+      .querySelectorAll(`iframe[id^="${PRINT_FRAME_ID_PREFIX}"]`)
+      .forEach((el) => {
+        try {
+          el.parentNode?.removeChild(el);
+        } catch {
+          /* ignore */
+        }
+      });
+
     const iframe = document.createElement("iframe");
     iframe.id = `${PRINT_FRAME_ID_PREFIX}${Date.now()}`;
     iframe.setAttribute("aria-hidden", "true");
-    // 不能用 display:none —— 部分 WebView 内核对 display:none 的 iframe
-    // 不会触发打印渲染。改用绝对定位 + 0 尺寸 + 视口外移开
+    // ⚠ 关键：iframe 必须有**真实布局尺寸**，否则 Chromium/WebView2 打印 0×0 iframe 时
+    // 布局视口塌成 0、分页计算失效 → 只输出第一页（用户报告「只能打印第一页」的根因）。
+    // 用 A4@96dpi（794×1123）作内容布局宽高，再用 left:-99999px 移出视口隐藏 —— 既不可见
+    // 又保留打印渲染。不能用 width/height:0、display:none、visibility:hidden（都会破坏分页/渲染）。
     iframe.style.cssText =
-      "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+      "position:fixed;left:-99999px;top:0;width:794px;height:1123px;border:0;background:#fff;";
 
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
+      window.removeEventListener("focus", onMainFocus);
       try {
         iframe.parentNode?.removeChild(iframe);
       } catch {
         /* ignore */
       }
+    };
+
+    // 主窗 focus 兜底：打印对话框是模态系统窗口，关闭后 Tauri 主 WebView 重新获得焦点。
+    // 这比 iframe 的 afterprint 在 WebView2 下更可靠，确保 iframe 被及时清理、不残留拖慢主窗。
+    const onMainFocus = () => {
+      // print() 期间主窗处于 blur，首个 focus 即对话框已关闭
+      setTimeout(cleanup, 200);
+      resolve();
     };
 
     iframe.onload = () => {
@@ -64,7 +87,7 @@ export function printHtmlAsPdf(html: string, title: string): Promise<void> {
         /* 跨域情况下访问会抛错，忽略：srcdoc 同源所以一般不会进 catch */
       }
 
-      // afterprint 事件在用户关闭打印对话框后触发（无论确认还是取消）
+      // 信号 1：afterprint 事件在用户关闭打印对话框后触发（无论确认还是取消）
       const onAfterPrint = () => {
         win.removeEventListener("afterprint", onAfterPrint);
         // 延迟清理：部分内核 print() 调用是异步的，立即移除会打断
@@ -72,8 +95,10 @@ export function printHtmlAsPdf(html: string, title: string): Promise<void> {
         resolve();
       };
       win.addEventListener("afterprint", onAfterPrint);
+      // 信号 2：主窗 focus（afterprint 在部分 WebView2 不触发时的可靠兜底）
+      window.addEventListener("focus", onMainFocus);
 
-      // 兜底：30 秒后强制清理（防止极端情况下 afterprint 未触发导致 iframe 泄漏）
+      // 信号 3：30 秒超时强制清理（极端情况下两个事件都没来时的最后保险）
       setTimeout(() => {
         if (!cleaned) {
           cleanup();
