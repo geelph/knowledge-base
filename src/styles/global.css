@@ -1254,6 +1254,15 @@ body,
 /* 图片 resize 暗色 — 见 themes.css */
 
 /* 表格 */
+/* 表格外层包裹：prosemirror-tables 自动生成 div.tableWrapper，并在 TableView 里
+   按列宽给 <table> 写内联 width / min-width = 各列宽之和（见 @tiptap/extension-table
+   TableView.ts）。一旦这个总宽超过编辑区（尤其大纲打开、1fr 变窄时），wrapper 默认
+   overflow:visible 会让表格直接撑破布局、溢出盖到大纲上（首列还被 table-layout:fixed
+   挤成单字竖排）。这里把溢出收进 wrapper 内部横向滚动，表格永远不超出正文列宽。 */
+.tiptap .tableWrapper {
+  max-width: 100%;
+  overflow-x: auto;
+}
 .tiptap table {
   border-collapse: collapse;
   width: 100%;
