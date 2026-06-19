@@ -18,6 +18,7 @@ export const PROVIDERS = [
   { value: "claude", label: "Claude (经 OpenRouter 等代理)" },
   { value: "minimax", label: "Minimax" },
   { value: "siliconflow", label: "SiliconFlow (硅基流动)" },
+  { value: "mimo", label: "小米 MiMo" },
   { value: "custom", label: "自定义 (OpenAI 兼容)" },
 ];
 
@@ -30,6 +31,7 @@ export const DEFAULT_URLS: Record<string, string> = {
   claude: "https://openrouter.ai/api/v1",
   minimax: "https://api.minimax.chat/v1",
   siliconflow: "https://api.siliconflow.cn/v1",
+  mimo: "https://api.xiaomimimo.com/v1",
   custom: "",
 };
 
@@ -42,6 +44,7 @@ export const MODEL_ID_PLACEHOLDERS: Record<string, string> = {
   claude: "如: anthropic/claude-sonnet-4.6 (经 OpenRouter 等兼容代理)",
   minimax: "如: abab6.5s-chat / MiniMax-M1",
   siliconflow: "如: Qwen/Qwen2.5-72B-Instruct / deepseek-ai/DeepSeek-V3",
+  mimo: "如: mimo-v2-pro / mimo-v2-flash",
   custom: "填你目标服务的模型标识",
 };
 
@@ -54,6 +57,7 @@ export const PROVIDER_NAME_MAP: Record<string, string> = {
   claude: "Claude",
   minimax: "Minimax",
   siliconflow: "SiliconFlow",
+  mimo: "小米 MiMo",
   custom: "自定义模型",
 };
 
@@ -105,6 +109,10 @@ export const MODEL_PRESETS: Record<
     { value: "Qwen/Qwen2.5-72B-Instruct", label: "Qwen/Qwen2.5-72B-Instruct" },
     { value: "deepseek-ai/DeepSeek-V3", label: "deepseek-ai/DeepSeek-V3" },
     { value: "deepseek-ai/DeepSeek-R1", label: "deepseek-ai/DeepSeek-R1 (推理)" },
+  ],
+  mimo: [
+    { value: "mimo-v2-pro", label: "mimo-v2-pro (旗舰)" },
+    { value: "mimo-v2-flash", label: "mimo-v2-flash (高速)" },
   ],
   custom: [],
 };
