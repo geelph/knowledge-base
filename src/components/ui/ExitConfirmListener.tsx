@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Modal, Button, App as AntdApp, List } from "antd";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { exit } from "@tauri-apps/plugin-process";
 import { useTabsStore, type NoteTab } from "@/store/tabs";
 import { noteApi, syncV1Api } from "@/lib/api";
@@ -36,13 +37,15 @@ async function pushAllOnExit(): Promise<{ ok: number; errors: string[] }> {
 }
 
 /**
- * 监听托盘"退出"事件 → 检查未保存草稿 → 三选一确认。
+ * 监听托盘"退出"事件 → 检查未保存草稿 → 三选一确认 → 隐藏到托盘后台同步再退。
  * 流程：
- *   - 无 dirty tab：直接 exit(0)
+ *   - 无 dirty tab：直接走 syncThenExit()
  *   - 有 dirty tab：弹 Modal，让用户选择
- *     - 保存并退出：循环 dirty tabs，从 store draft 取内容 → noteApi.update → exit
- *     - 放弃修改并退出：直接 exit
+ *     - 保存并退出：循环 dirty tabs，从 store draft 取内容 → noteApi.update → syncThenExit()
+ *     - 放弃修改并退出：直接 syncThenExit()
  *     - 取消：关闭 Modal，什么都不做
+ *
+ * syncThenExit()：先把窗口 hide() 到托盘，再后台 push —— 同步不阻塞主窗口，完成后自动 exit(0)。
  *
  * 注：托盘 quit 菜单项不再直接 app.exit(0)，而是 emit "tray:request-exit"，由本组件接管。
  */
@@ -50,8 +53,6 @@ export function ExitConfirmListener() {
   const { message } = AntdApp.useApp();
   const [dirtyTabs, setDirtyTabs] = useState<NoteTab[]>([]);
   const [exiting, setExiting] = useState(false);
-  /** 同步阶段的状态文本（"正在同步…" / "同步失败：xxx"）；非 null 时锁住 Modal */
-  const [syncStatus, setSyncStatus] = useState<string | null>(null);
   /** 同步失败兜底弹窗：显示错误 + 强制退出按钮 */
   const [syncFailedErrors, setSyncFailedErrors] = useState<string[] | null>(null);
   const open = dirtyTabs.length > 0;
@@ -75,21 +76,34 @@ export function ExitConfirmListener() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** 跑 push → 成功直接退；失败弹窗让用户选"强制退出 / 取消" */
+  /**
+   * 先把窗口隐藏到托盘，再在后台跑 push —— 同步不阻塞/卡住主窗口，用户体感"点完就关了"。
+   * 成功 → 直接 exit(0)；失败 → 把窗口重新显示出来，弹窗让用户选"强制退出 / 留下处理"。
+   */
   async function syncThenExit() {
-    setSyncStatus("正在同步到云端…");
-    const { ok, errors } = await pushAllOnExit();
+    // 收掉可能还开着的脏数据弹窗，窗口随即隐藏到托盘
+    setDirtyTabs([]);
+    try {
+      await getCurrentWindow().hide();
+    } catch {
+      // 隐藏失败不阻断后台同步流程
+    }
+
+    const { errors } = await pushAllOnExit();
     if (errors.length === 0) {
-      // ok 为 0（无配置）也视为通过，不阻塞退出
-      if (ok > 0) {
-        // 留 200ms 让用户看到"同步完成"再退（避免 Modal 闪一下就消失）
-        setSyncStatus(`已同步 ${ok} 个后端，正在退出…`);
-        await new Promise((r) => setTimeout(r, 200));
-      }
+      // errors 为空（含无配置 ok=0）即视为通过，不阻塞退出
       await exit(0);
       return;
     }
-    setSyncStatus(null);
+
+    // 同步失败：重新显示窗口，让用户决定强制退出还是回去手动处理
+    try {
+      const w = getCurrentWindow();
+      await w.show();
+      await w.setFocus();
+    } catch {
+      // 显示失败也要把错误弹窗挂出来（理论上窗口仍在）
+    }
     setSyncFailedErrors(errors);
   }
 
@@ -167,19 +181,7 @@ export function ExitConfirmListener() {
         />
       </Modal>
 
-      {/* 同步进行中的轻量提示 Modal（不可关，纯文字） */}
-      <Modal
-        open={syncStatus !== null}
-        title="退出前同步"
-        closable={false}
-        maskClosable={false}
-        keyboard={false}
-        footer={null}
-      >
-        <p style={{ marginTop: 0 }}>{syncStatus}</p>
-      </Modal>
-
-      {/* 同步失败兜底：让用户决定强制退出还是回去手动处理 */}
+      {/* 同步失败兜底:让用户决定强制退出还是回去手动处理（失败时窗口已重新显示） */}
       <Modal
         open={syncFailedErrors !== null}
         title="同步失败"
