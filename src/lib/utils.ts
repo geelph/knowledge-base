@@ -19,6 +19,26 @@ export function stripHtml(html: string): string {
     .trim();
 }
 
+/** 本地时区的 YYYY-MM-DD。
+ *
+ * 🔴 全前端「某天 → 日期串」的唯一真相源。严禁再用
+ * `new Date().toISOString().slice(0,10)` —— 那取的是 UTC 日期，与后端
+ * （daily 用 `chrono::Local`，统计用 `DATE(updated_at,'localtime')`）口径不一致：
+ * 东八区本地 00:00–08:00 会差一天，导致同一个「今天」在不同入口被算成两条日记
+ * （日记重复增殖），以及写作热力图/连续天数错位。前端必须对齐到本地。
+ */
+export function localYmd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** 本地时区「今天」的 YYYY-MM-DD（见 {@link localYmd} 的口径说明）。 */
+export function todayYmd(): string {
+  return localYmd(new Date());
+}
+
 /** 相对时间格式化 */
 export function relativeTime(dateStr: string): string {
   const date = new Date(dateStr);

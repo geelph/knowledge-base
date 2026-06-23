@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { CloseCircleFilled } from "@ant-design/icons";
 import { configApi, dailyApi, noteApi, templateApi } from "@/lib/api";
+import { todayYmd } from "@/lib/utils";
 import { MicButton } from "@/components/MicButton";
 import { TiptapEditor } from "@/components/editor";
 import { useAutoSave } from "@/hooks/useAutoSave";
@@ -37,9 +38,9 @@ function formatDateCN(dateStr: string): string {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
-/** 获取今天日期字符串 */
+/** 获取今天日期字符串（本地时区；勿用 UTC 的 toISOString，凌晨会差一天导致重复建日记）。 */
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayYmd();
 }
 
 /** HH:mm 格式化保存时间 */

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Modal, Segmented, message, theme as antdTheme } from "antd";
 import { Calendar, ChevronLeft, ChevronRight, Copy, Trash2 } from "lucide-react";
 import { dailyApi, trashApi } from "@/lib/api";
+import { todayYmd } from "@/lib/utils";
 import type { DailyEntry } from "@/types";
 import { useAppStore } from "@/store";
 import { useContextMenu } from "@/hooks/useContextMenu";
@@ -26,9 +27,9 @@ import { DailyMonthCalendar } from "./DailyMonthCalendar";
  *   · /daily?date=...  → 指定日期，selectedDate 从 URL 派生
  */
 
-/** 今天的 ISO 日期串 yyyy-mm-dd */
+/** 今天的本地日期串 yyyy-mm-dd（勿用 UTC toISOString，凌晨会差一天，与日记页口径不一致）。 */
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayYmd();
 }
 
 /** 解析 yyyy-mm-dd → {year, month, day} */

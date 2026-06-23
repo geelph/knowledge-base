@@ -51,7 +51,7 @@ import {
   ContextMenuOverlay,
   type ContextMenuEntry,
 } from "@/components/ui/ContextMenuOverlay";
-import { relativeTime } from "@/lib/utils";
+import { relativeTime, localYmd, todayYmd } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { NewNoteButton } from "@/components/NewNoteButton";
 import { NewTodoButton } from "@/components/NewTodoButton";
@@ -87,16 +87,7 @@ const { Text } = Typography;
  * 桌面端原版主页（保留所有原有 hook + 1300+ 行实现）。
  * 移动端走文件末尾的 HomePage wrapper → MobileHome（按设计稿小屏布局）。
  */
-/** 本地时区的 YYYY-MM-DD。
- *
- * 不能用 `new Date().toISOString().slice(0,10)` —— 那是 UTC 日期，后端 `DATE(updated_at)`
- * 用的是 localtime，两者在本地凌晨 0~8 点（东八区）会差一天，导致连续写作/柱状图错位。 */
-function localYmd(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
+// 日期口径统一到 @/lib/utils 的 localYmd / todayYmd（本地时区，勿用 UTC toISOString）
 
 function DesktopHomePage() {
   const navigate = useNavigate();
@@ -202,7 +193,7 @@ function DesktopHomePage() {
   // ─── 今日笔记跳转 ──────────────────────────────────
   const handleTodayNote = useCallback(async () => {
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayYmd();
       await dailyApi.getOrCreate(today);
       navigate(`/daily?date=${today}`);
     } catch (e) {
@@ -216,7 +207,7 @@ function DesktopHomePage() {
     if (!text) return;
     setQuickNoteSaving(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayYmd();
       const daily = await dailyApi.getOrCreate(today);
       const now = new Date();
       const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
