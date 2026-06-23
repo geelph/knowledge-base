@@ -42,13 +42,14 @@ import {
   ChevronDown,
   ExternalLink,
   Copy,
+  ClipboardCopy,
   GitCompare,
 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ColumnsType } from "antd/es/table";
 import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { noteApi, exportApi, folderApi, tagApi, trashApi } from "@/lib/api";
+import { noteApi, exportApi, folderApi, tagApi, trashApi, vaultApi } from "@/lib/api";
 import { MicButton } from "@/components/MicButton";
 import { useContextMenu } from "@/hooks/useContextMenu";
 import {
@@ -1023,6 +1024,24 @@ function DesktopNoteListPage() {
     [data.page, loadNotes],
   );
 
+  // 复制笔记正文（Markdown）到剪贴板。加密笔记的 content 字段是占位符，
+  // 需走 decryptNote 读出明文（不落盘）；vault 锁定时该调用会报错，统一兜底提示。
+  const handleCopyContent = useCallback(async (note: Note) => {
+    try {
+      const text = note.is_encrypted
+        ? await vaultApi.decryptNote(note.id)
+        : note.content;
+      if (!text || !text.trim()) {
+        message.warning("笔记内容为空");
+        return;
+      }
+      await navigator.clipboard.writeText(text);
+      message.success("已复制内容");
+    } catch (e) {
+      message.error(`复制失败：${e}`);
+    }
+  }, []);
+
   const handleRenameSubmit = useCallback(async () => {
     if (!renameTarget) return;
     const newTitle = renameValue.trim();
@@ -1085,6 +1104,15 @@ function DesktopNoteListPage() {
         },
       },
       {
+        key: "copy-content",
+        label: "复制内容",
+        icon: <ClipboardCopy size={13} />,
+        onClick: () => {
+          noteCtx.close();
+          handleCopyContent(note);
+        },
+      },
+      {
         key: "toggle-pin",
         label: note.is_pinned ? "取消置顶" : "置顶",
         icon: note.is_pinned ? <PinOff size={13} /> : <Pin size={13} />,
@@ -1105,7 +1133,7 @@ function DesktopNoteListPage() {
         },
       },
     ];
-  }, [noteCtx, navigate, handleTogglePin, handleSoftDelete]);
+  }, [noteCtx, navigate, handleTogglePin, handleSoftDelete, handleCopyContent]);
 
   const columns: ColumnsType<Note> = useMemo(
     () => [
