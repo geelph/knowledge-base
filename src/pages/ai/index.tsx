@@ -9,6 +9,7 @@ import {
   Modal,
   Select,
   Switch,
+  Checkbox,
   Tooltip,
   Dropdown,
   TreeSelect,
@@ -41,13 +42,14 @@ import { CloseCircleFilled } from "@ant-design/icons";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useNavigate, useLocation } from "react-router-dom";
-import { aiChatApi, aiModelApi, noteApi, aiAttachmentApi, folderApi } from "@/lib/api";
+import { aiChatApi, aiModelApi, noteApi, aiAttachmentApi, folderApi, dailyApi } from "@/lib/api";
 import { useAppStore } from "@/store";
 import type {
   AiConversation,
   AiMessage,
   AiModel,
   AttachmentPreview,
+  DailyEntry,
   Folder,
   MessageAttachment,
   Note,
@@ -470,7 +472,7 @@ function DesktopAiChatPage() {
       await loadConversations();
       setAttachOpen(false);
       message.success(
-        ids.length === 0 ? "已清空附加笔记" : `已附加 ${ids.length} 篇笔记`,
+        ids.length === 0 ? "已清空附加内容" : `已附加 ${ids.length} 项`,
       );
     } catch (e) {
       message.error(`保存失败: ${e}`);
@@ -1445,24 +1447,72 @@ function AttachNotesModal({
   onConfirm: (ids: number[]) => void;
 }) {
   const [allNotes, setAllNotes] = useState<Note[]>([]);
+  const [allDailies, setAllDailies] = useState<DailyEntry[]>([]);
+  const [includeDaily, setIncludeDaily] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // 打开时拉全部笔记 + 把当前已挂载的 ID 同步到选择器
+  // 打开时拉全部笔记 + 日记，并把当前已挂载的 ID 同步到选择器
+  // 日记本质是 notes 表里 is_daily=1 的笔记，id 与笔记同一空间，后端 get_note 透明可拉
   useEffect(() => {
     if (!open) return;
     setSelected(currentIds);
     setLoading(true);
-    noteApi
-      .list({ page: 1, page_size: 500 })
-      .then((res) => setAllNotes(res.items))
-      .catch((e) => message.error(`加载笔记失败: ${e}`))
+    Promise.all([
+      noteApi.list({ page: 1, page_size: 500 }),
+      dailyApi.listAll(),
+    ])
+      .then(([notesRes, dailies]) => {
+        setAllNotes(notesRes.items);
+        setAllDailies(dailies);
+        // 若已附加的条目里含日记，自动勾上"附加日记"，保证回填的 tag 正确显示
+        const dailyIdSet = new Set(dailies.map((d) => d.id));
+        setIncludeDaily(currentIds.some((id) => dailyIdSet.has(id)));
+      })
+      .catch((e) => message.error(`加载失败: ${e}`))
       .finally(() => setLoading(false));
   }, [open, currentIds]);
 
+  // 取消勾选"附加日记"时，把已选中的日记从选择里剔除（避免遗留隐藏选择）
+  function handleIncludeDailyChange(checked: boolean) {
+    setIncludeDaily(checked);
+    if (!checked) {
+      const dailyIdSet = new Set(allDailies.map((d) => d.id));
+      setSelected((prev) => prev.filter((id) => !dailyIdSet.has(id)));
+    }
+  }
+
+  // 日记选项：勾选时展示全部；不勾选时仅保留已选中的（避免 tag 显示成裸 id）
+  const visibleDailies = includeDaily
+    ? allDailies
+    : allDailies.filter((d) => selected.includes(d.id));
+
+  const groupedOptions = [
+    {
+      label: "笔记",
+      options: allNotes.map((n) => ({
+        value: n.id,
+        label: n.title || `笔记 #${n.id}`,
+      })),
+    },
+    ...(visibleDailies.length > 0
+      ? [
+          {
+            label: "日记",
+            options: visibleDailies.map((d) => ({
+              value: d.id,
+              label: `📅 ${d.daily_date}${
+                d.title && d.title !== d.daily_date ? ` ${d.title}` : ""
+              }`,
+            })),
+          },
+        ]
+      : []),
+  ];
+
   return (
     <Modal
-      title="附加笔记到对话上下文"
+      title="附加笔记 / 日记到对话上下文"
       open={open}
       onCancel={onClose}
       onOk={() => onConfirm(selected)}
@@ -1473,16 +1523,24 @@ function AttachNotesModal({
     >
       <div className="flex flex-col gap-2">
         <div className="text-xs" style={{ color: "#888" }}>
-          被选中的笔记会作为本对话的强制上下文（整个对话共享）。
+          被选中的内容会作为本对话的强制上下文（整个对话共享）。
           每篇按 60% 模型上下文的均分预算自动截断。
         </div>
+        <Checkbox
+          checked={includeDaily}
+          onChange={(e) => handleIncludeDailyChange(e.target.checked)}
+        >
+          同时附加日记
+        </Checkbox>
         <Select
           mode="multiple"
           showSearch
           value={selected}
           onChange={setSelected}
           loading={loading}
-          placeholder="搜索 / 选择笔记…"
+          placeholder={
+            includeDaily ? "搜索 / 选择笔记或日记…" : "搜索 / 选择笔记…"
+          }
           style={{ width: "100%" }}
           maxTagCount={5}
           maxTagPlaceholder={(omitted) => `+${omitted.length}`}
@@ -1491,10 +1549,7 @@ function AttachNotesModal({
               .toLowerCase()
               .includes(input.toLowerCase())
           }
-          options={allNotes.map((n) => ({
-            value: n.id,
-            label: n.title || `笔记 #${n.id}`,
-          }))}
+          options={groupedOptions}
         />
       </div>
     </Modal>
