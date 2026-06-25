@@ -14,11 +14,14 @@
  * DOMParser 永远只切出 1 张幻灯片（截图证实 "1 / 1"）。本次修复改为按 markdown
  * 文本切片 + 用 MarkdownContent 渲染。
  */
-import { useEffect, useMemo, useState } from "react";
-import { theme as antdTheme } from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { message, theme as antdTheme } from "antd";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import rehypeRaw from "rehype-raw";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { MarkdownContent } from "@/components/ai/MarkdownContent";
+import { KB_ASSET_SCHEME, parseKbAsset } from "@/lib/assetUrl";
+import { systemApi } from "@/lib/api";
 
 interface Props {
   open: boolean;
@@ -85,10 +88,64 @@ export function SlideshowView({ open, onClose, html, title }: Props) {
   const { token } = antdTheme.useToken();
   const slides = useMemo(() => (open ? splitIntoSlides(html) : []), [html, open]);
   const [index, setIndex] = useState(0);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // 打开时重置到首页
   useEffect(() => {
     if (open) setIndex(0);
+  }, [open]);
+
+  // 拦截幻灯片内的链接点击 → 分发给系统程序打开，而非让 WebView 整页导航。
+  //
+  // 幻灯片内容用 MarkdownContent（react-markdown）渲染,链接是原生 <a href>;
+  // 笔记里调过列宽的表格 / SafeLink 经 rehypeRaw 也还原成 <a>。在 Tauri WebView 里
+  // 点 <a> 会让整个 WebView 跳走（tauri-apps/tauri#2791），React 应用连同幻灯片
+  // 一起被销毁，无法 Esc 回退 —— 即用户反馈的「跳转后回不到幻灯片模式」。
+  //
+  // 用捕获阶段原生监听 + preventDefault 拦掉默认导航(与 TiptapEditor 同款做法),
+  // 再按协议分发:http(s)/mailto/tel → openUrl;kb-asset:// / file:// / 本地路径
+  // → openPath（系统默认程序）。外部程序/浏览器打开后,幻灯片保持原样不退出。
+  useEffect(() => {
+    if (!open) return;
+    const dom = contentRef.current;
+    if (!dom) return;
+    const handler = (ev: MouseEvent) => {
+      if (ev.type === "auxclick" && ev.button !== 1) return;
+      const target = ev.target as HTMLElement | null;
+      const linkEl = target?.closest("[data-href], a[href]") as HTMLElement | null;
+      if (!linkEl) return;
+      const href =
+        linkEl.getAttribute("data-href") || linkEl.getAttribute("href") || "";
+      if (!href || href.startsWith("#") || href === "javascript:void(0)") return;
+
+      ev.preventDefault();
+      ev.stopPropagation();
+
+      if (href.startsWith(KB_ASSET_SCHEME)) {
+        const rel = parseKbAsset(href) ?? "";
+        void systemApi
+          .resolveAssetAbsolute(rel)
+          .then((abs) => openPath(abs))
+          .catch((e) => message.error(`打开附件失败: ${e}`));
+      } else if (href.startsWith("file://")) {
+        const path = decodeURIComponent(href.replace(/^file:\/\/\/?/, ""));
+        void openPath(path).catch((e) => message.error(`打开失败: ${e}`));
+      } else if (
+        /^https?:\/\//i.test(href) ||
+        href.startsWith("mailto:") ||
+        href.startsWith("tel:")
+      ) {
+        void openUrl(href).catch((e) => message.error(`打开链接失败: ${e}`));
+      } else {
+        void openPath(href).catch((e) => message.error(`打开失败: ${e}`));
+      }
+    };
+    dom.addEventListener("click", handler, true);
+    dom.addEventListener("auxclick", handler, true);
+    return () => {
+      dom.removeEventListener("click", handler, true);
+      dom.removeEventListener("auxclick", handler, true);
+    };
   }, [open]);
 
   // 键盘事件：翻页 + 退出
@@ -236,6 +293,7 @@ export function SlideshowView({ open, onClose, html, title }: Props) {
             这里局部启用 rehype-raw 让内嵌 HTML 正常渲染。仅对用户自己的笔记开启，
             不动全局 MarkdownContent 默认行为（AI 回复仍不解析 HTML，避免 XSS 面）。 */}
         <div
+          ref={contentRef}
           className="tiptap ai-markdown slideshow-page"
           style={{
             background: token.colorBgContainer,
