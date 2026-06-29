@@ -110,6 +110,15 @@ calamine = "0.28"
 # 移动端按 T-M013 后再决策）
 docx-rs = "0.4"
 
+# ─── Windows 专属：panic hook 的原生错误对话框（MessageBoxW）────────────────
+# 仅链接 user32 的 MessageBoxW，体积开销极小；不依赖 tauri dialog 插件
+# （崩溃 / panic 时 event loop 与插件可能已不可用）。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+] }
+
 # ─── 编译优化 ────────────────────────────────────
 
 [profile.dev]

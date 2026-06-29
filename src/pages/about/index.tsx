@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { Card, Typography, Descriptions, Spin, message, Button, Tooltip, Tag } from "antd";
 import { SyncOutlined, SettingOutlined } from "@ant-design/icons";
 import { FolderOpen, ExternalLink } from "lucide-react";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { appLogDir } from "@tauri-apps/api/path";
 import type { SystemInfo } from "@/types";
 import { systemApi } from "@/lib/api";
 import { RecommendCards } from "@/components/ui/RecommendCards";
@@ -79,6 +80,7 @@ export default function AboutPage() {
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const updater = useUpdater();
 
   useEffect(() => {
@@ -95,6 +97,28 @@ export default function AboutPage() {
       await openPath(info.dataDir);
     } catch (e) {
       message.error(`打开目录失败: ${e}`);
+    }
+  }
+
+  async function handleOpenLogs() {
+    try {
+      await openPath(await appLogDir());
+    } catch (e) {
+      message.error(`打开日志目录失败: ${e}`);
+    }
+  }
+
+  async function handleExportDiagnostics() {
+    setExporting(true);
+    try {
+      const zip = await systemApi.exportDiagnostics();
+      message.success("诊断包已导出到桌面");
+      // 在文件管理器中定位到 zip，方便用户直接拿去发送
+      await revealItemInDir(zip).catch(() => {});
+    } catch (e) {
+      message.error(`导出诊断包失败: ${e}`);
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -181,6 +205,29 @@ export default function AboutPage() {
                     onClick={handleOpenDataDir}
                   />
                 </Tooltip>
+              </div>
+            </Descriptions.Item>
+            <Descriptions.Item label="日志与诊断">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  size="small"
+                  icon={<FolderOpen size={14} />}
+                  onClick={handleOpenLogs}
+                >
+                  打开日志目录
+                </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  ghost
+                  loading={exporting}
+                  onClick={handleExportDiagnostics}
+                >
+                  导出诊断包
+                </Button>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  闪退 / 异常时点「导出诊断包」生成 zip 发给开发者排查
+                </Text>
               </div>
             </Descriptions.Item>
           </Descriptions>

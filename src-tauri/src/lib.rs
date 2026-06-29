@@ -1,4 +1,6 @@
 mod commands;
+#[cfg(desktop)]
+mod crash_handler;
 mod database;
 mod error;
 mod models;
@@ -448,6 +450,12 @@ fn run_data_dir_migration_with_splash(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 全局 panic 兜底：必须在任何业务代码之前安装，杜绝 release(windows_subsystem=windows)
+    // 下"窗口闪一下就消失、却无任何日志"的静默闪退。崩溃日志写到 <app_data>/crash；
+    // 路径推导失败时 early_app_data_dir 内部已回退到临时目录。
+    #[cfg(desktop)]
+    crash_handler::install(early_app_data_dir().join("crash"));
+
     // 桌面端早期路径：单实例守护 + .md 投递（移动端无此概念，整段跳过）
     #[cfg(desktop)]
     let lock_prefix = if cfg!(debug_assertions) { "dev-" } else { "" };
@@ -507,7 +515,7 @@ pub fn run() {
         builder = builder.menu(build_chinese_app_menu);
     }
 
-    builder
+    let run_result = builder
         // ─── 应用初始化 ─────────────────────────────
         .setup(move |app| {
             // ⚠️ 第一步：立即显示主窗口，不依赖任何后续初始化成败。
@@ -610,19 +618,22 @@ pub fn run() {
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
             log::info!("数据库初始化完成: {}", db_path_str);
 
-            // 资产目录均基于 data_dir_root（service 内部仍叫 app_data_dir，语义是"数据根"）
-            let images_dir = services::image::ImageService::ensure_dir(&data_dir_root)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-            log::info!("图片存储目录: {}", images_dir.display());
-
-            let attachments_dir =
-                services::attachment::AttachmentService::ensure_dir(&data_dir_root)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-            log::info!("附件存储目录: {}", attachments_dir.display());
-
-            let pdfs_dir = services::pdf::PdfService::ensure_dir(&data_dir_root)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-            log::info!("PDF 存储目录: {}", pdfs_dir.display());
+            // 资产目录均基于 data_dir_root（service 内部仍叫 app_data_dir，语义是"数据根"）。
+            // 这三类素材目录属「可降级」初始化：创建失败只记 error 不中断启动——应用主体
+            // （笔记 / 搜索 / 数据库）仍可用，仅对应的图片 / 附件 / PDF 功能在用到时各自报错。
+            // 历史教训：此前用 ? 传播，任一目录创建失败就让 setup 返回 Err → 整个应用起不来。
+            match services::image::ImageService::ensure_dir(&data_dir_root) {
+                Ok(p) => log::info!("图片存储目录: {}", p.display()),
+                Err(e) => log::error!("图片目录创建失败（图片功能降级，不影响启动）: {}", e),
+            }
+            match services::attachment::AttachmentService::ensure_dir(&data_dir_root) {
+                Ok(p) => log::info!("附件存储目录: {}", p.display()),
+                Err(e) => log::error!("附件目录创建失败（附件功能降级，不影响启动）: {}", e),
+            }
+            match services::pdf::PdfService::ensure_dir(&data_dir_root) {
+                Ok(p) => log::info!("PDF 存储目录: {}", p.display()),
+                Err(e) => log::error!("PDF 目录创建失败（PDF 功能降级，不影响启动）: {}", e),
+            }
 
             // 绑定 PDFium 动态库（资源目录与实例无关）。各平台用各自的动态库格式：
             //   Windows: pdfium.dll  / macOS: libpdfium.dylib  / Linux: libpdfium.so
@@ -653,9 +664,10 @@ pub fn run() {
                 }
             }
 
-            let sources_dir = services::source_file::SourceFileService::ensure_dir(&data_dir_root)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-            log::info!("源文件存储目录: {}", sources_dir.display());
+            match services::source_file::SourceFileService::ensure_dir(&data_dir_root) {
+                Ok(p) => log::info!("源文件存储目录: {}", p.display()),
+                Err(e) => log::error!("源文件目录创建失败（源文件写回降级，不影响启动）: {}", e),
+            }
 
             // 把当前数据目录加进 asset protocol scope（递归）。
             // 静态 tauri.conf.json 里的 `$APPDATA/**` 只覆盖 OS 默认 app_data_dir，
@@ -867,6 +879,7 @@ pub fn run() {
             commands::system::copy_theme_bg,
             commands::system::clear_theme_bg,
             commands::system::path_exists,
+            commands::system::export_diagnostics,
             // 配置模块
             commands::config::get_all_config,
             commands::config::get_config,
@@ -1195,8 +1208,24 @@ pub fn run() {
                 let _ = window.emit("app:close-requested", ());
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    // 不再用 .expect() 把启动 / 运行错误升级成"无日志的静默 panic"——那正是线上
+    // "窗口闪一下就消失、却查不到任何原因"的根因之一。改为：记录崩溃日志 + 弹原生对话框，
+    // 再以非零码受控退出，保证用户有感知、开发者有据可查。
+    #[cfg(desktop)]
+    if let Err(err) = run_result {
+        crash_handler::report_fatal(
+            early_app_data_dir().join("crash"),
+            &format!("Tauri 运行 / 初始化失败，应用无法启动：{err}"),
+        );
+        std::process::exit(1);
+    }
+    #[cfg(not(desktop))]
+    if let Err(err) = run_result {
+        eprintln!("Tauri 运行 / 初始化失败，应用无法启动：{err}");
+        std::process::exit(1);
+    }
 }
 
 /// dev 模式首次启动时，把旧的无前缀数据自动迁移到 dev- 前缀

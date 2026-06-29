@@ -127,6 +127,9 @@ export const systemApi = {
   /** 把 base64 编码的二进制数据写入指定路径。配合 dialog.save() 用于导出 PNG/PDF 等。 */
   writeBinaryFile: (path: string, base64Data: string) =>
     invoke<void>("write_binary_file", { path, base64Data }),
+  /** 导出诊断包（应用日志 + 崩溃日志 + 系统信息打成 zip 放桌面），返回 zip 绝对路径。
+   *  用于线上闪退 / 异常时让用户一键打包日志发回（够不到机器时远程取证）。 */
+  exportDiagnostics: () => invoke<string>("export_diagnostics"),
 };
 
 /** 更新相关 API */

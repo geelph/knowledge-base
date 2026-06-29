@@ -175,3 +175,84 @@ pub fn clear_theme_bg(app: tauri::AppHandle) -> Result<(), String> {
 pub fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
+
+/// 导出诊断包：把应用日志（tauri-plugin-log）+ 崩溃日志（panic hook 写的 crash 目录）+
+/// 基础系统信息打成一个 zip 放到桌面，返回 zip 绝对路径。
+///
+/// 用途：线上闪退 / 异常时「够不到用户机器」，让用户在关于页一键打包发回，免去手动翻目录、
+/// 选文件、压缩的麻烦。任一来源目录缺失都不致命（跳过即可），尽量出包。
+#[tauri::command]
+pub fn export_diagnostics(app: tauri::AppHandle) -> Result<String, String> {
+    use std::io::Write as _;
+    use tauri::Manager;
+
+    // 来源目录：app_log_dir（tauri-plugin-log）+ <framework_app_data>/crash（panic hook）
+    let log_dir = app.path().app_log_dir().ok();
+    let crash_dir = crate::framework_app_data_dir(&app)
+        .ok()
+        .map(|d| d.join("crash"));
+
+    // 输出位置：优先桌面，回退下载目录，再回退数据目录
+    let out_base = app
+        .path()
+        .desktop_dir()
+        .or_else(|_| app.path().download_dir())
+        .or_else(|_| crate::framework_app_data_dir(&app))
+        .map_err(|e| format!("无法确定诊断包输出目录: {e}"))?;
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let zip_path = out_base.join(format!("知识库-诊断包-{stamp}.zip"));
+
+    let writer = std::fs::File::create(&zip_path).map_err(|e| format!("创建诊断包失败: {e}"))?;
+    let mut zip = zip::ZipWriter::new(writer);
+    let opt = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    // info.txt：基础环境信息
+    let info = format!(
+        "知识库 诊断信息\n\
+         生成时间: {}\n\
+         应用版本: {}\n\
+         操作系统: {}\n\
+         CPU 架构: {}\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        app.package_info().version,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+    zip.start_file("info.txt", opt).map_err(|e| e.to_string())?;
+    zip.write_all(info.as_bytes()).map_err(|e| e.to_string())?;
+
+    // 把一个目录下的文本日志文件加进 zip 的指定子目录（只收 .log/.txt，避免塞入大二进制）
+    let add_log_dir =
+        |zip: &mut zip::ZipWriter<std::fs::File>, dir: &std::path::Path, prefix: &str| {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let fname = entry.file_name();
+                let fname = fname.to_string_lossy();
+                if !(fname.ends_with(".log") || fname.ends_with(".txt")) {
+                    continue;
+                }
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if zip.start_file(format!("{prefix}/{fname}"), opt).is_ok() {
+                        let _ = zip.write_all(&bytes);
+                    }
+                }
+            }
+        };
+
+    if let Some(d) = &log_dir {
+        add_log_dir(&mut zip, d, "logs");
+    }
+    if let Some(d) = &crash_dir {
+        add_log_dir(&mut zip, d, "crash");
+    }
+
+    zip.finish().map_err(|e| format!("打包诊断失败: {e}"))?;
+    Ok(zip_path.to_string_lossy().into_owned())
+}
