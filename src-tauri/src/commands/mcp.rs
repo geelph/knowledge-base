@@ -516,6 +516,48 @@ pub fn mcp_create_server(
         .map_err(|e| e.to_string())
 }
 
+// ─── #8 插件层（方案 A：插件 = 外部 MCP server，进程隔离） ──────────
+
+/// 从 kb-plugin.json 清单一键安装插件（= 创建一个外部 MCP server）。
+/// `base_dir` = 清单文件所在目录，用于把清单 args/env 里的 `${PLUGIN_DIR}` 还原成绝对路径。
+#[tauri::command]
+pub fn plugin_install_from_manifest(
+    state: tauri::State<'_, AppState>,
+    manifest_json: String,
+    base_dir: Option<String>,
+) -> Result<McpServer, String> {
+    let input = crate::services::plugin::PluginService::manifest_to_input(
+        &manifest_json,
+        base_dir.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+    state.db.create_mcp_server(&input).map_err(|e| e.to_string())
+}
+
+/// 从 kb-plugin.json 文件路径一键安装：读文件 → base_dir = 文件父目录 → 解析 → 创建 server。
+/// 前端选好清单文件后直接传路径即可，无需前端读文件。
+#[tauri::command]
+pub fn plugin_install_from_file(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<McpServer, String> {
+    let p = std::path::Path::new(&path);
+    let manifest = std::fs::read_to_string(p).map_err(|e| format!("读取插件清单失败: {e}"))?;
+    let base_dir = p.parent().map(|d| d.to_string_lossy().to_string());
+    let input = crate::services::plugin::PluginService::manifest_to_input(
+        &manifest,
+        base_dir.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+    state.db.create_mcp_server(&input).map_err(|e| e.to_string())
+}
+
+/// 生成插件脚手架（Node stdio MCP server 模板），返回创建的插件目录绝对路径。
+#[tauri::command]
+pub fn plugin_scaffold(parent_dir: String, name: String) -> Result<String, String> {
+    crate::services::plugin::PluginService::scaffold(&parent_dir, &name).map_err(|e| e.to_string())
+}
+
 /// 更新已有 server 配置；同时让正在运行的 client 失效（下次访问会用新配置 spawn）
 #[tauri::command]
 pub async fn mcp_update_server(

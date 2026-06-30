@@ -32,7 +32,7 @@ import { ExternalLink, Folder, Trash2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { MarkdownContent as Markdown } from "@/components/ai/MarkdownContent";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { save as saveDialog, open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { systemApi } from "@/lib/api";
 import { useAppStore } from "@/store";
@@ -755,6 +755,75 @@ function ExternalServersSubsection({ sidecarBinaryPath, dbPath }: ExternalServer
     setModalOpen(true);
   }
 
+  // #8 安装插件：选 kb-plugin.json → 后端读文件解析 + 创建外部 MCP server
+  async function installPlugin() {
+    const file = await openFileDialog({
+      multiple: false,
+      filters: [{ name: "插件清单", extensions: ["json"] }],
+      title: "选择 kb-plugin.json",
+    });
+    if (!file) return;
+    try {
+      await invoke<McpServer>("plugin_install_from_file", { path: file as string });
+      message.success("插件已安装，可在下方列表点「列出工具」验证");
+      void load();
+    } catch (e) {
+      message.error(`安装失败: ${e}`);
+    }
+  }
+
+  // #8 创建插件：选目录 → 生成可直接 coding 的 Node MCP 插件脚手架
+  async function createPlugin() {
+    const dir = await openFileDialog({ directory: true, title: "选择放插件的目录" });
+    if (!dir) return;
+    let name = "my-plugin";
+    Modal.confirm({
+      title: "创建插件脚手架",
+      content: (
+        <div>
+          <p style={{ marginBottom: 8 }}>
+            将在所选目录下生成一个可直接 coding 的 Node MCP 插件模板（kb-plugin.json + server.mjs + package.json + README）。
+          </p>
+          <Input
+            defaultValue={name}
+            placeholder="插件名（作为目录名 + server 别名）"
+            onChange={(e) => {
+              name = e.target.value;
+            }}
+          />
+        </div>
+      ),
+      okText: "生成",
+      onOk: async () => {
+        try {
+          const created = await invoke<string>("plugin_scaffold", {
+            parentDir: dir as string,
+            name: name.trim() || "my-plugin",
+          });
+          Modal.success({
+            title: "插件脚手架已生成",
+            content: (
+              <div>
+                <p style={{ marginBottom: 4 }}>目录：</p>
+                <p style={{ fontFamily: "monospace", fontSize: 12, wordBreak: "break-all" }}>
+                  {created}
+                </p>
+                <p style={{ marginTop: 8 }}>
+                  下一步：进该目录 <code>npm install</code> → 编辑 <code>server.mjs</code> 加你的工具 →
+                  回来用「安装插件」导入它的 <code>kb-plugin.json</code>。
+                </p>
+              </div>
+            ),
+            okText: "打开文件夹",
+            onOk: () => revealItemInDir(created).catch(() => {}),
+          });
+        } catch (e) {
+          message.error(`生成失败: ${e}`);
+        }
+      },
+    });
+  }
+
   // 一键添加自家 kb-mcp 作为外部 server（dogfooding）
   async function quickAddSelf() {
     if (!sidecarBinaryPath) {
@@ -868,10 +937,16 @@ function ExternalServersSubsection({ sidecarBinaryPath, dbPath }: ExternalServer
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <Text strong>外部 MCP servers · {servers.length}</Text>
-        <Space>
+        <Text strong>外部 MCP servers / 插件 · {servers.length}</Text>
+        <Space wrap>
+          <Button size="small" icon={<PlusOutlined />} onClick={installPlugin}>
+            安装插件（导入清单）
+          </Button>
+          <Button size="small" onClick={createPlugin}>
+            创建插件（脚手架）
+          </Button>
           <Button size="small" icon={<PlusOutlined />} onClick={quickAddSelf}>
-            一键添加 kb-mcp（自我集成测试）
+            一键添加 kb-mcp
           </Button>
           <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openCreate}>
             添加 server
@@ -879,9 +954,16 @@ function ExternalServersSubsection({ sidecarBinaryPath, dbPath }: ExternalServer
         </Space>
       </div>
 
+      <Alert
+        type="info"
+        showIcon
+        className="mb-2"
+        message="插件 = 一个 stdio MCP server（任意语言写都行，进程隔离最安全）。「创建插件」生成脚手架开始 coding，「安装插件」从 kb-plugin.json 一键装入；安装后即出现在下方列表。"
+      />
+
       {servers.length === 0 ? (
         <Empty
-          description="还没有外部 MCP server。试试「一键添加 kb-mcp」自我集成测试，或加 GitHub/Filesystem/高德地图 等第三方 server"
+          description="还没有插件 / 外部 MCP server。点「创建插件」生成脚手架开始写，或「安装插件」导入 kb-plugin.json，也可「一键添加 kb-mcp」自我集成测试"
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         />
       ) : (

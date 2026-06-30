@@ -902,6 +902,10 @@ pub fn run() {
             commands::mcp::mcp_update_server,
             commands::mcp::mcp_delete_server,
             commands::mcp::mcp_set_server_enabled,
+            // #8 插件层（插件 = 外部 MCP server）
+            commands::mcp::plugin_install_from_manifest,
+            commands::mcp::plugin_install_from_file,
+            commands::mcp::plugin_scaffold,
             // 外部 MCP server 子进程仅桌面端
             #[cfg(desktop)]
             commands::mcp::mcp_external_list_tools,
