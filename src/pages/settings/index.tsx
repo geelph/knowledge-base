@@ -126,6 +126,7 @@ const PROVIDERS = [
   { value: "minimax", label: "Minimax" },
   { value: "siliconflow", label: "SiliconFlow (硅基流动)" },
   { value: "mimo", label: "小米 MiMo" },
+  { value: "kimi", label: "KIMI (月之暗面 Moonshot)" },
   // 完全自定义
   { value: "custom", label: "自定义 (OpenAI 兼容)" },
 ];
@@ -143,6 +144,8 @@ const DEFAULT_URLS: Record<string, string> = {
   minimax: "https://api.minimax.chat/v1",
   siliconflow: "https://api.siliconflow.cn/v1",
   mimo: "https://api.xiaomimimo.com/v1",
+  // 国内站；国际站为 https://api.moonshot.ai/v1（可在表单里手动改）
+  kimi: "https://api.moonshot.cn/v1",
   custom: "",
 };
 
@@ -157,6 +160,7 @@ const MODEL_ID_PLACEHOLDERS: Record<string, string> = {
   minimax: "如: abab6.5s-chat / MiniMax-M1",
   siliconflow: "如: Qwen/Qwen2.5-72B-Instruct / deepseek-ai/DeepSeek-V3",
   mimo: "如: mimo-v2-pro / mimo-v2-flash",
+  kimi: "如: kimi-k2.6 / moonshot-v1-32k",
   custom: "填你目标服务的模型标识",
 };
 
@@ -227,6 +231,15 @@ const MODEL_PRESETS: Record<string, { value: string; label: string }[]> = {
   mimo: [
     { value: "mimo-v2-pro", label: "mimo-v2-pro (旗舰)" },
     { value: "mimo-v2-flash", label: "mimo-v2-flash (高速)" },
+  ],
+  kimi: [
+    { value: "kimi-k2.6", label: "kimi-k2.6 (旗舰 / 256K)" },
+    { value: "kimi-k2.7-code", label: "kimi-k2.7-code (编程)" },
+    { value: "kimi-k2.5", label: "kimi-k2.5" },
+    { value: "kimi-latest", label: "kimi-latest (跟随最新)" },
+    { value: "moonshot-v1-128k", label: "moonshot-v1-128k (长上下文)" },
+    { value: "moonshot-v1-32k", label: "moonshot-v1-32k" },
+    { value: "moonshot-v1-8k", label: "moonshot-v1-8k" },
   ],
   custom: [],
 };
