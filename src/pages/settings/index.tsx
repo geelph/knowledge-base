@@ -38,14 +38,17 @@ import {
   EDITOR_FONT_STACKS,
   EDITOR_FONT_SIZE_OPTIONS,
   EDITOR_LINE_HEIGHT_OPTIONS,
+  EDITOR_CODE_FONT_SIZE_OPTIONS,
   EDITOR_READING_WIDTH_OPTIONS,
   EDITOR_READING_WIDTH_LABELS,
   EDITOR_RULE_LABELS,
   UI_SCALE_OPTIONS,
   AUTO_SAVE_DELAY_OPTIONS,
+  LAYOUT_PRESETS,
   suggestUiScale,
   type EditorFontFamily,
   type EditorRuleLines,
+  type LayoutPresetId,
 } from "@/store";
 import { importWordFiles } from "@/lib/wordImport";
 import { Checkbox } from "antd";
@@ -479,9 +482,11 @@ function DesktopSettingsPage() {
   const editorFontFamily = useAppStore((s) => s.editorFontFamily);
   const editorFontSize = useAppStore((s) => s.editorFontSize);
   const editorLineHeight = useAppStore((s) => s.editorLineHeight);
+  const editorCodeFontSize = useAppStore((s) => s.editorCodeFontSize);
   const setEditorFontFamily = useAppStore((s) => s.setEditorFontFamily);
   const setEditorFontSize = useAppStore((s) => s.setEditorFontSize);
   const setEditorLineHeight = useAppStore((s) => s.setEditorLineHeight);
+  const setEditorCodeFontSize = useAppStore((s) => s.setEditorCodeFontSize);
   const resetEditorTypography = useAppStore((s) => s.resetEditorTypography);
   // 编辑器版面偏好（阅读列宽 / 纸张 / 纹理 / 首行缩进）
   const editorReadingWidth = useAppStore((s) => s.editorReadingWidth);
@@ -563,6 +568,28 @@ function DesktopSettingsPage() {
   // 默认查看模式（打开笔记时默认是"编辑"还是"阅读"）
   const defaultViewMode = useAppStore((s) => s.defaultViewMode);
   const setDefaultViewMode = useAppStore((s) => s.setDefaultViewMode);
+  // 大纲面板停靠位置（左 / 右）
+  const outlinePosition = useAppStore((s) => s.outlinePosition);
+  const setOutlinePosition = useAppStore((s) => s.setOutlinePosition);
+  // 布局预设：读取当前布局字段以判定哪个预设处于激活态 + 一键应用
+  // （autoHideActivityBar 在上方已声明，此处复用）
+  const sidePanelVisible = useAppStore((s) => s.sidePanelVisible);
+  const outlineVisible = useAppStore((s) => s.outlineVisible);
+  const applyLayoutPreset = useAppStore((s) => s.applyLayoutPreset);
+  // 当前布局命中哪个预设（全部声明字段都相等才算命中；否则为"自定义"）
+  const activeLayoutPreset = useMemo(() => {
+    const cur: Record<string, unknown> = {
+      sidePanelVisible,
+      autoHideActivityBar,
+      outlineVisible,
+      outlinePosition,
+    };
+    return (
+      LAYOUT_PRESETS.find((p) =>
+        Object.entries(p.values).every(([k, v]) => cur[k] === v),
+      )?.id ?? null
+    );
+  }, [sidePanelVisible, autoHideActivityBar, outlineVisible, outlinePosition]);
 
   // 订阅全局 foldersRefreshTick：Sidebar 修改文件夹后自动刷新设置页的文件夹选项
   // 走 idle defer：从笔记页切到设置页瞬间，路由 commit + 编辑器 destroy 已经吃掉一帧时间，
@@ -1631,6 +1658,34 @@ function DesktopSettingsPage() {
         }
       >
         <div className="flex items-center justify-between py-1">
+          <div style={{ minWidth: 0, marginRight: 12 }}>
+            <div>布局预设</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {activeLayoutPreset
+                ? LAYOUT_PRESETS.find((p) => p.id === activeLayoutPreset)
+                    ?.description
+                : "一键切换整体布局（笔记侧栏 / 活动栏 / 大纲）；手动调整后显示为自定义"}
+            </Text>
+          </div>
+          <div className="flex gap-2" style={{ flexShrink: 0 }}>
+            {LAYOUT_PRESETS.map((p) => (
+              <Button
+                key={p.id}
+                size="small"
+                title={p.description}
+                type={activeLayoutPreset === p.id ? "primary" : "default"}
+                onClick={() => applyLayoutPreset(p.id as LayoutPresetId)}
+              >
+                {p.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div
+          className="flex items-center justify-between py-1 mt-2"
+          style={{ borderTop: "1px solid #f0f0f0", paddingTop: 12 }}
+        >
           <div>
             <div>正文字体</div>
             <Text type="secondary" style={{ fontSize: 12 }}>
@@ -1665,7 +1720,7 @@ function DesktopSettingsPage() {
           <div>
             <div>正文字号</div>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              标题、代码块按比例缩放
+              标题按比例缩放；代码块默认跟随，可在下方单独设置
             </Text>
           </div>
           <Select
@@ -1675,6 +1730,27 @@ function DesktopSettingsPage() {
             options={EDITOR_FONT_SIZE_OPTIONS.map((s) => ({
               value: s,
               label: `${s} px`,
+            }))}
+          />
+        </div>
+
+        <div
+          className="flex items-center justify-between py-1 mt-2"
+          style={{ borderTop: "1px solid #f0f0f0", paddingTop: 12 }}
+        >
+          <div>
+            <div>代码块字号</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              全文代码块统一字号，一处设置全文生效（类似语雀）
+            </Text>
+          </div>
+          <Select
+            value={editorCodeFontSize}
+            onChange={setEditorCodeFontSize}
+            style={{ width: 120 }}
+            options={EDITOR_CODE_FONT_SIZE_OPTIONS.map((s) => ({
+              value: s,
+              label: s === 0 ? "跟随正文" : `${s} px`,
             }))}
           />
         </div>
@@ -1773,6 +1849,29 @@ function DesktopSettingsPage() {
           />
         </div>
 
+        <div
+          className="flex items-center justify-between py-1 mt-2"
+          style={{ borderTop: "1px solid #f0f0f0", paddingTop: 12 }}
+        >
+          <div>
+            <div>大纲位置</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              文档大纲（目录）停靠在编辑区的左侧还是右侧
+            </Text>
+          </div>
+          <Radio.Group
+            optionType="button"
+            buttonStyle="solid"
+            size="small"
+            value={outlinePosition}
+            onChange={(e) => setOutlinePosition(e.target.value as "left" | "right")}
+            options={[
+              { value: "left", label: "左侧" },
+              { value: "right", label: "右侧" },
+            ]}
+          />
+        </div>
+
         {/* 高亮快捷键（编辑器内动作，键位可自定义；区别于上方系统级全局快捷键） */}
         <EditorHighlightShortcutRow />
 
@@ -1803,6 +1902,20 @@ function DesktopSettingsPage() {
             春有百花秋有月，夏有凉风冬有雪。
             <br />
             The quick brown fox jumps over the lazy dog. 1234567890
+          </div>
+          <div
+            style={{
+              marginTop: 8,
+              padding: "8px 10px",
+              background: "var(--ant-color-fill-tertiary, #f0f0f0)",
+              borderRadius: 6,
+              fontFamily: '"JetBrains Mono", "Fira Code", "Consolas", monospace',
+              // 代码块字号预览：0 = 跟随正文（× 0.9，对齐 .tiptap pre 的 0.9em）
+              fontSize: editorCodeFontSize > 0 ? editorCodeFontSize : Math.round(editorFontSize * 0.9),
+              lineHeight: 1.6,
+            }}
+          >
+            {'const greet = (name) => "Hello, " + name;'}
           </div>
           <div className="flex justify-end mt-3">
             <Button size="small" onClick={resetEditorTypography}>

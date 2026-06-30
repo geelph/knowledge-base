@@ -340,6 +340,26 @@ body,
   align-items: start;
 }
 
+/* 大纲左置（data-outline-pos="left"）：DOM 顺序固定为 内容→分隔条→大纲，
+   用 grid order 把视觉次序换成 大纲→分隔条→内容（列模板已在内联 style 翻转）；
+   并把面板内边距与分隔线翻到右侧，使分隔线贴着正文那一侧。 */
+.editor-body[data-outline-pos="left"] > .editor-content-area {
+  order: 3;
+}
+.editor-body[data-outline-pos="left"] > .editor-outline-splitter {
+  order: 2;
+}
+.editor-body[data-outline-pos="left"] > .editor-outline-aside {
+  order: 1;
+  padding: 24px 0 24px 12px;
+}
+.editor-body[data-outline-pos="left"] .editor-outline {
+  border-left: none;
+  border-right: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+  padding-left: 0;
+  padding-right: 10px;
+}
+
 
 .editor-content-area {
   /* 底部 10vh 空白：兼顾大纲跳转的 scrollIntoView 余量与视觉紧凑感；
@@ -899,7 +919,9 @@ body,
   margin: 0.6em 0;
   overflow-x: auto;
   font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
-  font-size: 0.9em;
+  /* 代码块字号：用户在设置里调过则读 --editor-code-font-size（绝对 px，全文统一生效）；
+     未设置时回退 0.9em（相对正文，老行为）。仿语雀「一处设置全文代码块字号」。 */
+  font-size: var(--editor-code-font-size, 0.9em);
   line-height: 1.6;
 }
 .tiptap pre code {
@@ -1585,6 +1607,23 @@ body,
 .code-block-wrap-label {
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* 单代码块字号控件：与自动换行控件同源风格 */
+.code-block-fontsize-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+}
+.code-block-fontsize {
+  min-width: 56px;
+  font-size: 12px !important;
+}
+.code-block-fontsize .ant-select-selection-item {
+  font-size: 12px !important;
+  color: var(--ant-color-text-secondary) !important;
 }
 
 /* 代码块内的 pre：去掉外层圆角/边框（外壳已有），保留内边距 */

@@ -91,6 +91,13 @@ export const EDITOR_FONT_SIZE_OPTIONS = [12, 13, 14, 15, 16, 18, 20, 22] as cons
 export const EDITOR_LINE_HEIGHT_OPTIONS = [1.4, 1.5, 1.6, 1.8, 2.0] as const;
 
 /**
+ * 代码块字号预设（px）。仿语雀「代码块统一字号、一处设置全文生效」。
+ * 0 = 跟随正文（保持相对正文 0.9em 的老行为，向后兼容）；> 0 = 绝对 px。
+ * UI 把 0 单列成「跟随正文」选项。
+ */
+export const EDITOR_CODE_FONT_SIZE_OPTIONS = [0, 12, 13, 14, 15, 16, 18, 20] as const;
+
+/**
  * 笔记自动保存防抖延迟选项（毫秒）。
  * 用户停止输入达到该时长后，触发一次静默保存（silent=true，不弹 toast）。
  * 1000ms 偏激进，5000ms 偏保守；默认 1500ms 接近 OneNote / Notion 的体感。
@@ -102,6 +109,7 @@ export const EDITOR_FONT_DEFAULTS = {
   family: "system" as EditorFontFamily,
   size: 15,
   lineHeight: 1.8,
+  codeSize: 0, // 0 = 代码块字号跟随正文（相对 0.9em），保持老行为
 };
 
 /**
@@ -137,6 +145,61 @@ export const EDITOR_LAYOUT_DEFAULTS = {
   ruleLines: "none" as EditorRuleLines,
   firstLineIndent: false,
 };
+
+/**
+ * 布局预设：一键在「默认 / 专注写作 / 大纲优先」之间切换整体布局。
+ * 每个预设是一组**结构性布局**字段的快照（侧栏 / 活动栏 / 大纲可见性 + 位置），
+ * 故意不碰排版 / 字体偏好（阅读列宽 / 纸张 / 字号），避免覆盖用户精调。
+ * 字段为可选：未列出的字段保持当前值（如专注写作不动大纲位置，因为大纲已隐藏）。
+ */
+export type LayoutPresetId = "default" | "focus" | "outline";
+
+export interface LayoutPreset {
+  id: LayoutPresetId;
+  label: string;
+  description: string;
+  values: {
+    sidePanelVisible?: boolean;
+    autoHideActivityBar?: boolean;
+    outlineVisible?: boolean;
+    outlinePosition?: "left" | "right";
+  };
+}
+
+export const LAYOUT_PRESETS: LayoutPreset[] = [
+  {
+    id: "default",
+    label: "默认",
+    description: "笔记侧栏 + 大纲（右侧）全部显示，活动栏常驻",
+    values: {
+      sidePanelVisible: true,
+      autoHideActivityBar: false,
+      outlineVisible: true,
+      outlinePosition: "right",
+    },
+  },
+  {
+    id: "focus",
+    label: "专注写作",
+    description: "隐藏笔记侧栏与大纲，活动栏自动收起，只留正文",
+    values: {
+      sidePanelVisible: false,
+      autoHideActivityBar: true,
+      outlineVisible: false,
+    },
+  },
+  {
+    id: "outline",
+    label: "大纲优先",
+    description: "大纲移到左侧、隐藏笔记侧栏，大纲成为主导航",
+    values: {
+      sidePanelVisible: false,
+      autoHideActivityBar: false,
+      outlineVisible: true,
+      outlinePosition: "left",
+    },
+  },
+];
 
 /**
  * 界面缩放因子档位（持久化）。
@@ -240,6 +303,8 @@ interface AppStore {
   editorFontSize: number;
   /** 编辑器行距倍数（持久化） */
   editorLineHeight: number;
+  /** 编辑器代码块字号 px（持久化）。0 = 跟随正文（相对 0.9em），> 0 = 绝对 px */
+  editorCodeFontSize: number;
   /** 编辑器正文阅读列宽 px（持久化）。0 = 不限制（铺满） */
   editorReadingWidth: number;
   /** 编辑器纸张卡片观感开关（持久化） */
@@ -277,6 +342,8 @@ interface AppStore {
   defaultViewMode: "edit" | "read";
   /** 笔记编辑页：右侧大纲面板是否显示（持久化）。标题数 < 2 时由组件自动隐藏，与此独立 */
   outlineVisible: boolean;
+  /** 笔记编辑页：大纲面板停靠位置（持久化）。'right'（默认）/ 'left' */
+  outlinePosition: "left" | "right";
   /**
    * NotesPanel 文件夹树：被显式折叠的文件夹 id 集合（持久化）。
    * 存"折叠"而不是"展开"——新建文件夹默认展开，符合直觉；空集合 = 全部展开。
@@ -462,6 +529,8 @@ interface AppStore {
   setEditorFontSize: (size: number) => void;
   /** 设置编辑器行距倍数 */
   setEditorLineHeight: (lineHeight: number) => void;
+  /** 设置代码块字号（px，0 = 跟随正文；非 0 会 clamp 到 [12, 20]） */
+  setEditorCodeFontSize: (size: number) => void;
   /** 重置编辑器字体 + 版面到默认值 */
   resetEditorTypography: () => void;
   /** 设置正文阅读列宽（px，0 = 不限制；非 0 会 clamp 到 [480, 1600]） */
@@ -488,6 +557,10 @@ interface AppStore {
   toggleOutline: () => void;
   /** 设置大纲面板可见性（persist） */
   setOutlineVisible: (visible: boolean) => void;
+  /** 设置大纲面板停靠位置（左/右，persist） */
+  setOutlinePosition: (pos: "left" | "right") => void;
+  /** 应用布局预设（默认 / 专注写作 / 大纲优先），一次性切换一组布局字段（persist） */
+  applyLayoutPreset: (id: LayoutPresetId) => void;
   /** 单个文件夹的折叠状态写入（true=收起 / false=展开） */
   setNotesFolderCollapsed: (key: string, collapsed: boolean) => void;
   /** 整体覆盖：把传入的 keys 设为"折叠"，其余视为展开（顶部"全部折叠"按钮用） */
@@ -652,6 +725,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   editorFontFamily: EDITOR_FONT_DEFAULTS.family,
   editorFontSize: EDITOR_FONT_DEFAULTS.size,
   editorLineHeight: EDITOR_FONT_DEFAULTS.lineHeight,
+  editorCodeFontSize: EDITOR_FONT_DEFAULTS.codeSize,
   editorReadingWidth: EDITOR_LAYOUT_DEFAULTS.readingWidth,
   editorPaper: EDITOR_LAYOUT_DEFAULTS.paper,
   editorRuleLines: EDITOR_LAYOUT_DEFAULTS.ruleLines,
@@ -663,6 +737,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   autoSaveDelay: AUTO_SAVE_DELAY_DEFAULT,
   defaultViewMode: "edit",
   outlineVisible: true,
+  outlinePosition: "right",
   notesCollapsedFolderKeys: [],
   notesUncategorizedExpanded: false,
   notesShowOnlyFolders: false,
@@ -928,11 +1003,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const clamped = Math.max(1.2, Math.min(2.5, Number(lineHeight) || 1.8));
     set({ editorLineHeight: clamped });
   },
+  setEditorCodeFontSize: (size) => {
+    // 0 = 跟随正文（保留 0.9em 老行为）；非 0 时 clamp 到合法预设范围 [12, 20]
+    const n = Math.round(Number(size) || 0);
+    const clamped = n <= 0 ? 0 : Math.max(12, Math.min(20, n));
+    set({ editorCodeFontSize: clamped });
+  },
   resetEditorTypography: () =>
     set({
       editorFontFamily: EDITOR_FONT_DEFAULTS.family,
       editorFontSize: EDITOR_FONT_DEFAULTS.size,
       editorLineHeight: EDITOR_FONT_DEFAULTS.lineHeight,
+      editorCodeFontSize: EDITOR_FONT_DEFAULTS.codeSize,
       editorReadingWidth: EDITOR_LAYOUT_DEFAULTS.readingWidth,
       editorPaper: EDITOR_LAYOUT_DEFAULTS.paper,
       editorRuleLines: EDITOR_LAYOUT_DEFAULTS.ruleLines,
@@ -964,6 +1046,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setDefaultViewMode: (mode) => set({ defaultViewMode: mode === "read" ? "read" : "edit" }),
   toggleOutline: () => set((s) => ({ outlineVisible: !s.outlineVisible })),
   setOutlineVisible: (visible) => set({ outlineVisible: visible }),
+  setOutlinePosition: (pos) => set({ outlinePosition: pos === "left" ? "left" : "right" }),
+  applyLayoutPreset: (id) => {
+    const preset = LAYOUT_PRESETS.find((p) => p.id === id);
+    // 只 set 预设声明的字段；未声明的保持当前值。这些字段均已纳入持久化。
+    if (preset) set({ ...preset.values });
+  },
   setNotesFolderCollapsed: (key, collapsed) =>
     set((s) => {
       const has = s.notesCollapsedFolderKeys.includes(key);
@@ -1138,6 +1226,7 @@ export function applyEditorTypography(state: {
   editorFontFamily: EditorFontFamily;
   editorFontSize: number;
   editorLineHeight: number;
+  editorCodeFontSize: number;
 }) {
   const root = document.documentElement;
   const stack = EDITOR_FONT_STACKS[state.editorFontFamily];
@@ -1148,6 +1237,12 @@ export function applyEditorTypography(state: {
   }
   root.style.setProperty("--editor-font-size", `${state.editorFontSize}px`);
   root.style.setProperty("--editor-line-height", String(state.editorLineHeight));
+  // 代码块字号：> 0 写绝对 px（全文代码块统一生效）；0 → 移除变量，CSS 回退到相对正文的 0.9em
+  if (state.editorCodeFontSize > 0) {
+    root.style.setProperty("--editor-code-font-size", `${state.editorCodeFontSize}px`);
+  } else {
+    root.style.removeProperty("--editor-code-font-size");
+  }
 }
 
 /**
@@ -1372,6 +1467,10 @@ export async function loadThemeFromStore() {
     if (typeof lh === "number" && Number.isFinite(lh)) {
       useAppStore.getState().setEditorLineHeight(lh);
     }
+    const cfs = await store.get<number>("editorCodeFontSize");
+    if (typeof cfs === "number" && Number.isFinite(cfs)) {
+      useAppStore.getState().setEditorCodeFontSize(cfs);
+    }
 
     // 恢复编辑器版面偏好（阅读列宽 / 纸张 / 纹理 / 首行缩进）
     const erw = await store.get<number>("editorReadingWidth");
@@ -1410,6 +1509,10 @@ export async function loadThemeFromStore() {
     const ov = await store.get<boolean>("outlineVisible");
     if (typeof ov === "boolean") {
       useAppStore.getState().setOutlineVisible(ov);
+    }
+    const op = await store.get<string>("outlinePosition");
+    if (op === "left" || op === "right") {
+      useAppStore.getState().setOutlinePosition(op);
     }
 
     // 恢复自动保存偏好（默认关闭，老用户升级后行为不变）
@@ -1516,6 +1619,7 @@ export async function saveThemeToStore() {
       editorFontFamily,
       editorFontSize,
       editorLineHeight,
+      editorCodeFontSize,
       editorReadingWidth,
       editorPaper,
       editorRuleLines,
@@ -1527,6 +1631,7 @@ export async function saveThemeToStore() {
       autoSaveDelay,
       defaultViewMode,
       outlineVisible,
+      outlinePosition,
       notesCollapsedFolderKeys,
       notesUncategorizedExpanded,
       notesShowOnlyFolders,
@@ -1552,6 +1657,7 @@ export async function saveThemeToStore() {
     await store.set("editorFontFamily", editorFontFamily);
     await store.set("editorFontSize", editorFontSize);
     await store.set("editorLineHeight", editorLineHeight);
+    await store.set("editorCodeFontSize", editorCodeFontSize);
     await store.set("editorReadingWidth", editorReadingWidth);
     await store.set("editorPaper", editorPaper);
     await store.set("editorRuleLines", editorRuleLines);
@@ -1563,6 +1669,7 @@ export async function saveThemeToStore() {
     await store.set("autoSaveDelay", autoSaveDelay);
     await store.set("defaultViewMode", defaultViewMode);
     await store.set("outlineVisible", outlineVisible);
+    await store.set("outlinePosition", outlinePosition);
     await store.set("notesCollapsedFolderKeys", notesCollapsedFolderKeys);
     await store.set("notesUncategorizedExpanded", notesUncategorizedExpanded);
     await store.set("notesShowOnlyFolders", notesShowOnlyFolders);
@@ -1593,7 +1700,7 @@ useAppStore.subscribe((state) => {
   // notesHeadingFolded 摘要：用 entries 数 + 总 anchor 数 简化对比，避免每次 stringify 大对象
   const headingFoldEntries = Object.entries(state.notesHeadingFolded);
   const headingFoldKey = `${headingFoldEntries.length}:${headingFoldEntries.reduce((acc, [, v]) => acc + v.length, 0)}:${headingFoldEntries.map(([k, v]) => `${k}=${v.join(",")}`).join("|")}`;
-  const key = `${state.lightTheme}|${state.darkTheme}|${state.themeCategory}|${state.alwaysOnTop}|${state.sidePanelWidth}|${state.sidePanelVisible}|${state.autoHideActivityBar}|${state.recentSearches.join(",")}|${state.editorFontFamily}|${state.editorFontSize}|${state.editorLineHeight}|${state.editorReadingWidth}|${state.editorPaper}|${state.editorRuleLines}|${state.editorFirstLineIndent}|${state.editorHighlightShortcut}|${state.uiScale}|${state.uiScaleUserSet}|${state.autoSaveEnabled}|${state.autoSaveDelay}|${state.outlineVisible}|${state.notesCollapsedFolderKeys.join(",")}|${state.notesUncategorizedExpanded}|${state.notesShowOnlyFolders}|${state.notesFoldersInitialCollapseDone}|${state.notesCollapseFoldersOnStartup}|${headingFoldKey}|${state.themeOverridesEnabled}|${state.customAccent ?? ""}|${state.customBgImage ?? ""}|${state.customBgDim}|${state.customBgBlur}|${state.customBgFit}`;
+  const key = `${state.lightTheme}|${state.darkTheme}|${state.themeCategory}|${state.alwaysOnTop}|${state.sidePanelWidth}|${state.sidePanelVisible}|${state.autoHideActivityBar}|${state.recentSearches.join(",")}|${state.editorFontFamily}|${state.editorFontSize}|${state.editorLineHeight}|${state.editorCodeFontSize}|${state.editorReadingWidth}|${state.editorPaper}|${state.editorRuleLines}|${state.editorFirstLineIndent}|${state.editorHighlightShortcut}|${state.uiScale}|${state.uiScaleUserSet}|${state.autoSaveEnabled}|${state.autoSaveDelay}|${state.outlineVisible}|${state.outlinePosition}|${state.notesCollapsedFolderKeys.join(",")}|${state.notesUncategorizedExpanded}|${state.notesShowOnlyFolders}|${state.notesFoldersInitialCollapseDone}|${state.notesCollapseFoldersOnStartup}|${headingFoldKey}|${state.themeOverridesEnabled}|${state.customAccent ?? ""}|${state.customBgImage ?? ""}|${state.customBgDim}|${state.customBgBlur}|${state.customBgFit}`;
   if (key !== _prevPersistKey) {
     _prevPersistKey = key;
     saveThemeToStore();
@@ -1603,7 +1710,7 @@ useAppStore.subscribe((state) => {
 // 编辑器字体偏好变化时实时同步到 CSS 变量（无需刷新页面）
 let _prevTypographyKey = "";
 useAppStore.subscribe((state) => {
-  const key = `${state.editorFontFamily}|${state.editorFontSize}|${state.editorLineHeight}`;
+  const key = `${state.editorFontFamily}|${state.editorFontSize}|${state.editorLineHeight}|${state.editorCodeFontSize}`;
   if (key !== _prevTypographyKey) {
     _prevTypographyKey = key;
     applyEditorTypography(state);

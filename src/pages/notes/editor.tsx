@@ -760,6 +760,8 @@ function DesktopNoteEditorPage() {
   }, [editorInstance]);
   const outlineVisible = useAppStore((s) => s.outlineVisible);
   const toggleOutline = useAppStore((s) => s.toggleOutline);
+  // 大纲停靠位置（'right' 默认 / 'left'）。影响 grid 列序 + 拖拽方向 + 面板内边距/分隔线方向。
+  const outlinePosition = useAppStore((s) => s.outlinePosition);
   // 阅读列宽（px，0=不限制）。隐藏大纲时把大纲腾出的横向空间补给正文，避免两侧空白过大。
   const editorReadingWidth = useAppStore((s) => s.editorReadingWidth);
   const autoSaveEnabled = useAppStore((s) => s.autoSaveEnabled);
@@ -2085,12 +2087,17 @@ function DesktopNoteEditorPage() {
         className="editor-body"
         ref={editorBodyRef}
         data-outline={effectiveOutlineVisible ? "on" : undefined}
+        data-outline-pos={effectiveOutlineVisible ? outlinePosition : undefined}
         style={{
           flex: 1,
           minWidth: 0,
           ...(effectiveOutlineVisible && {
-            // 覆盖 CSS 里固定的 200px：1fr | 6px 分隔 | 自适应宽度的大纲列
-            gridTemplateColumns: `minmax(0, 1fr) 6px ${outlineWidth}px`,
+            // 覆盖 CSS 里固定的 200px：左置时 大纲列 | 6px 分隔 | 1fr；右置时反之。
+            // DOM 顺序固定为 内容→分隔条→大纲，左置时由 CSS order 调换视觉次序。
+            gridTemplateColumns:
+              outlinePosition === "left"
+                ? `${outlineWidth}px 6px minmax(0, 1fr)`
+                : `minmax(0, 1fr) 6px ${outlineWidth}px`,
           }),
         }}
       >
@@ -2246,8 +2253,12 @@ function DesktopNoteEditorPage() {
               const handleMove = (ev: MouseEvent) => {
                 const ref = outlineDragRef.current;
                 if (!ref) return;
-                // 鼠标向左 → 大纲变宽（X 减小）
-                const delta = ref.startX - ev.clientX;
+                // 右置：分隔条在大纲左缘，鼠标向左 → 变宽（startX - X）；
+                // 左置：分隔条在大纲右缘，鼠标向右 → 变宽（X - startX）。方向相反。
+                const delta =
+                  outlinePosition === "left"
+                    ? ev.clientX - ref.startX
+                    : ref.startX - ev.clientX;
                 const next = Math.max(140, Math.min(480, ref.startWidth + delta));
                 ref.latest = next;
                 setOutlineWidth(next);

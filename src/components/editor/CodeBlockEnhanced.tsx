@@ -92,6 +92,18 @@ function buildLanguageOptions(): { value: string; label: string }[] {
   ];
 }
 
+/** 单代码块字号下拉选项。value=0 → null（跟随全局 --editor-code-font-size / 0.9em）。 */
+const CODE_FONT_SIZE_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "跟随" },
+  { value: 12, label: "12" },
+  { value: 13, label: "13" },
+  { value: 14, label: "14" },
+  { value: 15, label: "15" },
+  { value: 16, label: "16" },
+  { value: 18, label: "18" },
+  { value: 20, label: "20" },
+];
+
 /**
  * 自定义代码块扩展。继承 CodeBlockLowlight 的 lowlight 高亮能力，
  * 加 title / wrap / showLineNumbers 三个 attrs（language 已有），用 ReactNodeView 渲染。
@@ -120,6 +132,22 @@ export const CodeBlockEnhanced = CodeBlockLowlight.extend({
             ? { "data-line-numbers": "false" }
             : {},
       },
+      // 单代码块字号（px）。null = 跟随全局（CSS 变量 --editor-code-font-size，回退 0.9em）。
+      // 导出 HTML / 打印路径额外写 inline style，让脱离 NodeView 的 <pre> 也带上字号。
+      fontSize: {
+        default: null,
+        parseHTML: (el) => {
+          const n = parseInt(el.getAttribute("data-font-size") || "", 10);
+          return Number.isFinite(n) && n > 0 ? n : null;
+        },
+        renderHTML: (attrs) =>
+          attrs.fontSize
+            ? {
+                "data-font-size": String(attrs.fontSize),
+                style: `font-size:${attrs.fontSize}px`,
+              }
+            : {},
+      },
     };
   },
 
@@ -145,13 +173,15 @@ export const CodeBlockEnhanced = CodeBlockLowlight.extend({
           const title = node.attrs.title as string | null;
           const wrap = Boolean(node.attrs.wrap);
           const noLN = node.attrs.showLineNumbers === false;
+          const fontSize = node.attrs.fontSize as number | null;
           // title 里如果用户填了双引号，转义掉避免破坏 fence info 解析
           const titlePart = title
             ? ` title="${String(title).replace(/"/g, '\\"')}"`
             : "";
+          const fontSizePart = fontSize ? ` fontSize=${fontSize}` : "";
           const wrapPart = wrap ? " wrap" : "";
           const lnPart = noLN ? " no-line-numbers" : "";
-          const info = `${lang}${titlePart}${wrapPart}${lnPart}`;
+          const info = `${lang}${titlePart}${fontSizePart}${wrapPart}${lnPart}`;
           state.write("```" + info + "\n");
           state.text(node.textContent, false);
           state.ensureNewLine();
@@ -188,6 +218,7 @@ export function normalizeCodeBlockFenceAttrs(editor: Editor): void {
       ...node.attrs,
       language: parsed.language || null,
       title: parsed.title ?? node.attrs.title ?? null,
+      fontSize: parsed.fontSize ?? (node.attrs.fontSize as number | null) ?? null,
       wrap: parsed.wrap || Boolean(node.attrs.wrap),
       showLineNumbers: parsed.noLineNumbers
         ? false
@@ -203,6 +234,7 @@ export function normalizeCodeBlockFenceAttrs(editor: Editor): void {
 interface ParsedFenceInfo {
   language: string;
   title?: string;
+  fontSize?: number;
   wrap?: boolean;
   noLineNumbers?: boolean;
 }
@@ -219,11 +251,16 @@ function parseCodeFenceInfo(info: string): ParsedFenceInfo {
   const titleMatch = rest.match(/title=(["'])((?:\\.|(?!\1).)*)\1/);
   const title = titleMatch ? titleMatch[2].replace(/\\"/g, '"').replace(/\\'/g, "'") : undefined;
 
+  // fontSize=14（仅数字）
+  const fsMatch = rest.match(/(^|\s)fontSize=(\d+)(\s|$)/);
+  const fsNum = fsMatch ? parseInt(fsMatch[2], 10) : NaN;
+  const fontSize = Number.isFinite(fsNum) && fsNum > 0 ? fsNum : undefined;
+
   // 独立 keyword：wrap / no-line-numbers（前后是空格或边界）
   const wrap = /(^|\s)wrap(\s|$)/.test(rest);
   const noLineNumbers = /(^|\s)no-line-numbers(\s|$)/.test(rest);
 
-  return { language, title, wrap, noLineNumbers };
+  return { language, title, fontSize, wrap, noLineNumbers };
 }
 
 /** React NodeView — toolbar + 代码内容（PM 管） + 行号 */
@@ -237,6 +274,7 @@ function CodeBlockNodeView({
   const title: string = (node.attrs.title as string | null) ?? "";
   const wrap: boolean = Boolean(node.attrs.wrap);
   const showLineNumbers: boolean = node.attrs.showLineNumbers !== false;
+  const fontSize: number | null = (node.attrs.fontSize as number | null) ?? null;
 
   const [copied, setCopied] = useState(false);
   const [autoDetected, setAutoDetected] = useState<string | null>(null);
@@ -336,6 +374,34 @@ function CodeBlockNodeView({
     updateAttributes({ wrap: checked });
   };
 
+  /** 改本块字号：0 → null（跟随全局），否则写绝对 px */
+  const handleFontSizeChange = (value: number) => {
+    updateAttributes({ fontSize: value > 0 ? value : null });
+  };
+
+  /**
+   * 「应用到全文」：把当前代码块的字号刷给本文档全部代码块（语雀式一键同步）。
+   * size=null 时即把全文代码块统一恢复为"跟随全局"。一次事务批量改，单步可撤销。
+   */
+  const applyFontSizeToAll = () => {
+    const size = (node.attrs.fontSize as number | null) ?? null;
+    const { state } = editor;
+    const tr = state.tr;
+    let count = 0;
+    state.doc.descendants((n, pos) => {
+      if (n.type.name === "codeBlock") {
+        tr.setNodeMarkup(pos, undefined, { ...n.attrs, fontSize: size });
+        count += 1;
+      }
+    });
+    if (count > 0) editor.view.dispatch(tr);
+    message.success(
+      size
+        ? `已将全文 ${count} 个代码块字号设为 ${size}px`
+        : `已将全文 ${count} 个代码块字号恢复为跟随正文`,
+    );
+  };
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(node.textContent);
@@ -399,6 +465,31 @@ function CodeBlockNodeView({
           </Tooltip>
         )}
         <div className="code-block-toolbar-spacer" />
+        <span className="code-block-fontsize-control">
+          <span className="code-block-wrap-label">字号</span>
+          <Select
+            className="code-block-fontsize"
+            size="small"
+            value={fontSize ?? 0}
+            onChange={handleFontSizeChange}
+            options={CODE_FONT_SIZE_OPTIONS}
+            variant="borderless"
+            disabled={!isEditable}
+            popupMatchSelectWidth={false}
+          />
+        </span>
+        {fontSize != null && isEditable && (
+          <Tooltip title="把当前代码块字号应用到本文全部代码块">
+            <Button
+              size="small"
+              type="link"
+              onClick={applyFontSizeToAll}
+              style={{ padding: "0 4px", fontSize: 12 }}
+            >
+              应用到全文
+            </Button>
+          </Tooltip>
+        )}
         <span className="code-block-wrap-control">
           <span className="code-block-wrap-label">自动换行</span>
           <Switch
@@ -430,7 +521,11 @@ function CodeBlockNodeView({
           mermaid 预览态下用 display:none 隐藏，但保留 PM 的 contentDOM 锚点 */}
       <pre
         className={`hljs language-${language || "plaintext"}`}
-        style={showMermaidPreview ? { display: "none" } : undefined}
+        style={{
+          // 单块字号优先于全局 --editor-code-font-size；inline style 覆盖 .tiptap pre 的字号
+          ...(fontSize ? { fontSize: `${fontSize}px` } : {}),
+          ...(showMermaidPreview ? { display: "none" } : {}),
+        }}
       >
         {showLineNumbers && !showMermaidPreview && (
           <CodeLineGutter text={node.textContent} contentEditable={false} />
