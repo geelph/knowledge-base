@@ -881,7 +881,23 @@ export function TiptapEditor({
         );
       }
 
-      editor.chain().focus().insertContent(nodes).run();
+      // #14：光标在有序/无序/任务列表项内时，把（块级）图片插到该 listItem 末尾作为其子块，
+      // 避免块级图片在列表项中间劈裂 <ol> → 后段序号从 1 重算（“断层”）。
+      // listItem 的 content 是 `paragraph block*`，块级图片作为后续子块合法，单个 <ol> 得以保持。
+      const { $from } = editor.state.selection;
+      let liDepth = -1;
+      for (let d = $from.depth; d > 0; d--) {
+        const typeName = $from.node(d).type.name;
+        if (typeName === "listItem" || typeName === "taskItem") {
+          liDepth = d;
+          break;
+        }
+      }
+      if (liDepth >= 0) {
+        editor.chain().focus().insertContentAt($from.end(liDepth), nodes).run();
+      } else {
+        editor.chain().focus().insertContent(nodes).run();
+      }
     },
     [noteId],
   );

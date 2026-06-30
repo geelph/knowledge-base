@@ -1235,6 +1235,22 @@ function applyBlockType(editor: Editor, type: BlockType): void {
   }
   const lv = parseInt(type.slice(1), 10);
   if (lv >= 1 && lv <= 6) {
+    // 标题不能存在于列表项内：listItem/taskItem 的 content 要求首子节点是 paragraph，
+    // 光标在有序/无序/任务列表里时直接 setHeading 会被 schema 拒绝而静默失败（用户点 H1/H2 没反应）。
+    // 先反复 liftListItem 把光标从（可能多级嵌套的）列表里完全抬出来，再设标题。
+    let guard = 0;
+    while (guard < 10) {
+      const inTask = editor.isActive("taskItem");
+      const inList = editor.isActive("listItem");
+      if (!inTask && !inList) break;
+      const ok = editor
+        .chain()
+        .focus()
+        .liftListItem(inTask ? "taskItem" : "listItem")
+        .run();
+      if (!ok) break;
+      guard += 1;
+    }
     editor
       .chain()
       .focus()

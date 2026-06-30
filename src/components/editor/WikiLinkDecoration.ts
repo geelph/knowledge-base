@@ -5,14 +5,15 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 
 export interface WikiLinkOptions {
   /**
-   * Ctrl/Cmd + 点击 wiki 链接时触发。
+   * 点击 wiki 链接时触发。
    * 优先用 `id`（候选下拉选中的稳定锚点，永不失效）；
    * 没有 `id` 时（用户手敲的 `[[标题]]`）回退按 title 查。
    */
   onClick: (title: string, id?: number) => void;
   /**
    * 是否处于阅读模式（不可编辑）。函数式取值，保证编辑器实例只创建一次时仍能拿到实时态。
-   * 阅读态无光标定位需求 → 普通单击即跳转；编辑态仍要求 Ctrl/Cmd + 点击。
+   * 注：双链点击已统一为「普通单击即跳转」（编辑态/阅读态一致），此项当前不再用于点击门槛，
+   * 保留以兼容调用方与未来按模式差异化的需求。
    */
   isReadingMode?: () => boolean;
 }
@@ -43,7 +44,7 @@ function buildDecorations(doc: PMNode): DecorationSet {
           class: "wiki-link",
           "data-wiki-link": title,
           ...(idStr ? { "data-wiki-link-id": idStr } : {}),
-          title: `Ctrl/Cmd + 点击跳转到「${title}」`,
+          title: `点击跳转到「${title}」`,
         }),
       );
 
@@ -75,7 +76,6 @@ export const WikiLinkDecoration = Extension.create<WikiLinkOptions>({
   addProseMirrorPlugins() {
     const pluginKey = new PluginKey<DecorationSet>("wikiLinkDecoration");
     const onClick = this.options.onClick;
-    const isReadingMode = this.options.isReadingMode;
 
     return [
       new Plugin({
@@ -91,11 +91,11 @@ export const WikiLinkDecoration = Extension.create<WikiLinkOptions>({
           decorations(state) {
             return pluginKey.getState(state) ?? DecorationSet.empty;
           },
-          // 编辑态：仅 Ctrl/Cmd + 点击触发跳转，保留普通点击的光标定位。
-          // 阅读态：不可编辑、无光标定位需求 → 普通单击即跳转（与 Obsidian 阅读视图一致）。
+          // 双链普通单击即跳转（编辑态、阅读态一致）。
+          // 历史上编辑态要求 Ctrl/Cmd+点击以保留光标定位，但 .wiki-link 的 cursor:pointer 手型
+          // 暗示「可直接点」，普通左键却没反应 → 用户高频反馈「双链点击无效」。改为普通单击即跳。
+          // 注：仅点中双链文本本身才跳；点击双链以外位置仍正常定位光标，不影响编辑其它文字。
           handleClick(_view, _pos, event) {
-            const reading = isReadingMode?.() ?? false;
-            if (!reading && !(event.ctrlKey || event.metaKey)) return false;
             const target = event.target as HTMLElement | null;
             const el = target?.closest("[data-wiki-link]") as HTMLElement | null;
             if (!el) return false;

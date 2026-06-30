@@ -36,6 +36,7 @@ import {
   GitCompare,
   Sparkles,
   Search,
+  Hash,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { FolderFilled } from "@ant-design/icons";
@@ -1390,6 +1391,20 @@ export function NotesPanel() {
             navigator.clipboard
               .writeText(`[[${name}]]`)
               .then(() => message.success("已复制"))
+              .catch((err) => message.error(String(err)));
+            close();
+          },
+        },
+        {
+          // 复制笔记数字 ID：给外部 agent / MCP 用，拿到 ID 后直接 get_note(id)，
+          // 省去"搜标题/搜内容"的耗 token 步骤。ID 即 notes 表自增主键。
+          key: "copy-note-id",
+          icon: <Hash size={14} />,
+          label: "复制笔记 ID",
+          onClick: () => {
+            navigator.clipboard
+              .writeText(String(noteId))
+              .then(() => message.success(`已复制 ID：${noteId}`))
               .catch((err) => message.error(String(err)));
             close();
           },

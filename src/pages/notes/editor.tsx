@@ -26,7 +26,7 @@ import { useAppStore } from "@/store";
 import { useTabsStore } from "@/store/tabs";
 import { noteApi, tagApi, folderApi, linkApi, exportApi, sourceFileApi, vaultApi, sourceWritebackApi } from "@/lib/api";
 import { printHtmlAsPdf } from "@/lib/exportPdf";
-import { printEditorContent } from "@/lib/printNote";
+import { printEditorContent, copyEditorContentForWord } from "@/lib/printNote";
 import { VaultModal } from "@/components/vault/VaultModal";
 import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -1528,7 +1528,8 @@ function DesktopNoteEditorPage() {
     });
     if (!parentDir) return;
     try {
-      const result = await exportApi.exportSingle(noteId, parentDir as string);
+      // 单文件模式：不生成文件夹，图片/附件 base64 内嵌进 .md，直接产出一个 {标题}.md
+      const result = await exportApi.exportSingle(noteId, parentDir as string, true);
       // 通过 Modal.success 给两个明确的后续操作按钮
       Modal.success({
         title: "导出成功",
@@ -1536,16 +1537,16 @@ function DesktopNoteEditorPage() {
           <div>
             <p style={{ marginBottom: 4 }}>
               {result.assets_copied > 0
-                ? `已导出 .md 与 ${result.assets_copied} 个资产文件，目录：`
-                : "已导出 .md，目录："}
+                ? `已导出单文件 .md（含 ${result.assets_copied} 个内嵌图片/附件），文件：`
+                : "已导出单文件 .md，文件："}
             </p>
             <p style={{ fontFamily: "monospace", fontSize: 12, wordBreak: "break-all" }}>
-              {result.root_dir}
+              {result.file_path}
             </p>
           </div>
         ),
         okText: "打开所在文件夹",
-        onOk: () => revealItemInDir(result.root_dir).catch(() => {}),
+        onOk: () => revealItemInDir(result.file_path).catch(() => {}),
         closable: true,
       });
     } catch (e) {
@@ -1665,6 +1666,24 @@ function DesktopNoteEditorPage() {
     } catch (e) {
       hide();
       message.error(`打印失败: ${e}`);
+    }
+  }
+
+  /** #12 复制为 Word：把当前笔记复制成富文本（图片 base64 内嵌），
+   *  直接粘进 Word / WPS / 邮件即所见即所得，不再出现大量空行 / 排版乱。 */
+  async function handleCopyForWord() {
+    if (!editorInstance) {
+      message.warning("编辑器尚未就绪，请稍候再试");
+      return;
+    }
+    const hide = message.loading("正在复制为富文本…", 0);
+    try {
+      await copyEditorContentForWord(editorInstance, title);
+      hide();
+      message.success("已复制为富文本，可直接粘贴到 Word / WPS / 邮件");
+    } catch (e) {
+      hide();
+      message.error(`复制失败: ${e}`);
     }
   }
 
@@ -2027,6 +2046,11 @@ function DesktopNoteEditorPage() {
                         key: "docx",
                         label: "导出为 Word (.docx)",
                         onClick: () => void handleExportWord(),
+                      },
+                      {
+                        key: "copy-word",
+                        label: "复制为 Word（富文本，可直接粘贴）",
+                        onClick: () => void handleCopyForWord(),
                       },
                       {
                         key: "html",

@@ -75,6 +75,56 @@ export async function printEditorContent(editor: Editor, title: string): Promise
 }
 
 /**
+ * #12「复制为 Word」：把编辑器当前内容复制成**富文本**写入剪贴板，
+ * 直接粘进 Word / WPS / 邮件等富文本编辑器即所见即所得，不再出现“大量空行 / 排版乱”
+ *（旧的 Ctrl+C 走 Markdown 文本，块间 \n\n 被 Word 当成一个个空段落）。
+ *
+ * 复用打印同款管线：克隆编辑器真实 DOM → 剥编辑态控件 → 图片固化 base64
+ * → Rust 内嵌残留本地资源 → 作为 text/html 写剪贴板（同时附 text/plain 兜底）。
+ */
+export async function copyEditorContentForWord(
+  editor: Editor,
+  title: string,
+): Promise<void> {
+  const clone = (editor.view.dom as HTMLElement).cloneNode(true) as HTMLElement;
+  const safeTitle = escapeHtml(title.trim() || "未命名");
+  clone.insertAdjacentHTML("afterbegin", `<h1>${safeTitle}</h1>`);
+  stripEditingArtifacts(clone);
+  await inlineImages(clone);
+
+  let html =
+    `<div class="editor-content-area"><div class="tiptap-wrapper">` +
+    `<div class="tiptap-content">${clone.outerHTML}</div></div></div>`;
+  try {
+    // Rust 兜底内嵌残留 kb-asset:// 本地资源（图片已是 data: URL，会被自动跳过）
+    html = await exportApi.inlineNoteHtmlAssets(html);
+  } catch {
+    /* 内嵌失败不阻断：残留本地图片在外部可能裂图，但结构/文字正常 */
+  }
+
+  // text/plain 用单换行分隔块，避免 Word 把 Markdown 的 \n\n 当成空段落
+  const plain = editor.getText({ blockSeparator: "\n" });
+  await writeRichTextToClipboard(html, plain);
+}
+
+/** 富文本写剪贴板：优先 ClipboardItem(text/html + text/plain)，不支持则降级写纯文本。 */
+async function writeRichTextToClipboard(
+  html: string,
+  plain: string,
+): Promise<void> {
+  if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "text/html": new Blob([html], { type: "text/html" }),
+        "text/plain": new Blob([plain], { type: "text/plain" }),
+      }),
+    ]);
+    return;
+  }
+  await navigator.clipboard.writeText(plain);
+}
+
+/**
  * 把 DOM 里的 `<img>` 逐个固化成 base64 data URL。
  *
  * 编辑器实时 DOM 的 `img.src` 已是可显示 URL（http://asset.localhost/… 或 blob:…），
