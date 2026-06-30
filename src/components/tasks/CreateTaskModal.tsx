@@ -1236,7 +1236,7 @@ export function CreateTaskModal({
                   draftSubInputRef.current?.focus(),
                 );
               }}
-              placeholder="+ 新增子任务（回车连续录入）"
+              placeholder="新增子任务（回车连续录入）"
               prefix={
                 <Plus size={12} style={{ color: token.colorTextTertiary }} />
               }

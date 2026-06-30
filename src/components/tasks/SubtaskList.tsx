@@ -36,8 +36,7 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
   const [items, setItems] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
   const [draft, setDraft] = useState("");
-  const [adding, setAdding] = useState(false);
-  /** 用于回车追加后保持焦点；disabled input 会失焦，需手动 focus 回来 */
+  /** 回车追加后保持焦点，用户可连续录入下一条（输入框全程不 disable，焦点不丢） */
   const inputRef = useRef<InputRef>(null);
 
   const refresh = useCallback(async () => {
@@ -59,25 +58,23 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
   async function handleAdd() {
     const title = draft.trim();
     if (!title) return;
-    setAdding(true);
+    // 立即乐观清空：输入框马上空出来，焦点不丢，用户可直接连续录入下一条。
+    // 同一文本的重复回车由"清空后 title 为空 → 上面的 return"天然挡掉，无需 disable。
+    setDraft("");
     try {
       await taskApi.create({
         title,
         priority: 1,
         parent_task_id: parentTaskId,
       });
-      setDraft("");
       const list = await taskApi.listSubtasks(parentTaskId);
       setItems(list);
       const done = list.filter((t) => t.status === 1).length;
       onChanged?.(done, list.length);
     } catch (e) {
       message.error(`添加失败：${e}`);
-    } finally {
-      setAdding(false);
-      // adding=true 期间 input 被 disabled 会失焦；下一帧重新拿回焦点，
-      // 用户可以一直回车连续录入
-      requestAnimationFrame(() => inputRef.current?.focus());
+      // 失败且用户尚未输入新内容时，把刚才的文本还回去，避免丢字
+      setDraft((cur) => cur || title);
     }
   }
 
@@ -158,7 +155,7 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
                 onChange={() => handleToggle(t.id)}
               />
               <span
-                className="flex-1 truncate"
+                className="flex-1"
                 style={{
                   fontSize: 13,
                   color:
@@ -166,6 +163,15 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
                       ? token.colorTextTertiary
                       : token.colorText,
                   textDecoration: t.status === 1 ? "line-through" : "none",
+                  // 不再单行截断：自动换行完整显示，超长内容可见且可鼠标划选复制。
+                  // minWidth:0 让 flex 子项能正常收缩换行而不是溢出；
+                  // overflowWrap/wordBreak 处理无空格长串（URL 等）。
+                  minWidth: 0,
+                  whiteSpace: "normal",
+                  overflowWrap: "anywhere",
+                  wordBreak: "break-word",
+                  userSelect: "text",
+                  cursor: "text",
                 }}
                 title={t.title}
               >
@@ -190,7 +196,7 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onPressEnter={handleAdd}
-        placeholder="+ 新增子任务（回车连续录入）"
+        placeholder="新增子任务（回车连续录入）"
         prefix={<Plus size={12} style={{ color: token.colorTextTertiary }} />}
         allowClear
         suffix={
@@ -201,7 +207,6 @@ export function SubtaskList({ parentTaskId, onChanged, compact = false }: Props)
             }
           />
         }
-        disabled={adding}
       />
     </div>
   );
