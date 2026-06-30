@@ -34,19 +34,28 @@ pub fn export_notes(
 
 /// 导出单篇笔记为 Markdown 文件
 ///
-/// 入参 `parent_dir` 是用户选择的父目录；服务会在其下创建一层
-/// `{标题}/` 子目录，里面放 `{标题}.md` 与 `assets/`。
+/// 入参 `parent_dir` 是用户选择的父目录。
+/// - `single_file = false`/缺省：在其下建一层 `{标题}/` 子目录，放 `{标题}.md` + `assets/`。
+/// - `single_file = true`：不建目录，图片/附件 base64 内嵌，直接在 `parent_dir` 下写单个 `{标题}.md`。
 ///
 /// - `id`: 笔记 ID
 /// - `parent_dir`: 用户选择的父目录路径
+/// - `single_file`: 是否导出为单文件（不生成文件夹），缺省 false 保持原行为
 #[tauri::command]
 pub fn export_single_note(
     state: tauri::State<'_, AppState>,
     id: i64,
     parent_dir: String,
+    single_file: Option<bool>,
 ) -> Result<SingleExportResult, String> {
-    services::export::ExportService::export_single_note(&state.db, &state.data_dir, id, &parent_dir)
-        .map_err(|e| e.to_string())
+    services::export::ExportService::export_single_note(
+        &state.db,
+        &state.data_dir,
+        id,
+        &parent_dir,
+        single_file.unwrap_or(false),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// T-020 导出单条笔记为 Word（.docx）

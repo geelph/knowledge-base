@@ -667,23 +667,24 @@ function DesktopNoteListPage() {
     });
     if (!parentDir) return;
     try {
-      const result = await exportApi.exportSingle(record.id, parentDir as string);
+      // 单文件模式：不生成文件夹，图片/附件 base64 内嵌进 .md，直接产出一个 {标题}.md
+      const result = await exportApi.exportSingle(record.id, parentDir as string, true);
       Modal.success({
         title: "导出成功",
         content: (
           <div>
             <p style={{ marginBottom: 4 }}>
               {result.assets_copied > 0
-                ? `已导出 .md 与 ${result.assets_copied} 个资产文件，目录：`
-                : "已导出 .md，目录："}
+                ? `已导出单文件 .md（含 ${result.assets_copied} 个内嵌图片/附件），文件：`
+                : "已导出单文件 .md，文件："}
             </p>
             <p style={{ fontFamily: "monospace", fontSize: 12, wordBreak: "break-all" }}>
-              {result.root_dir}
+              {result.file_path}
             </p>
           </div>
         ),
         okText: "打开所在文件夹",
-        onOk: () => revealItemInDir(result.root_dir).catch(() => {}),
+        onOk: () => revealItemInDir(result.file_path).catch(() => {}),
         closable: true,
       });
     } catch (e) {

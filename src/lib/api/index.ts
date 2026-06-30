@@ -625,10 +625,11 @@ export const exportApi = {
    *  实际会在其下创建一层 `知识库导出_YYYYMMDD_HHmmss/` 作为导出根（见返回值 root_dir） */
   exportNotes: (outputDir: string, folderId?: number | null) =>
     invoke<ExportResult>("export_notes", { outputDir, folderId }),
-  /** 导出单篇笔记。`parentDir` 是用户选择的父目录，
-   *  实际会在其下创建一层 `{标题}/`，里面放 `{标题}.md` 与 `assets/` */
-  exportSingle: (id: number, parentDir: string) =>
-    invoke<SingleExportResult>("export_single_note", { id, parentDir }),
+  /** 导出单篇笔记。`parentDir` 是用户选择的父目录。
+   *  - `singleFile=false`（缺省）：在其下建一层 `{标题}/`，放 `{标题}.md` 与 `assets/`
+   *  - `singleFile=true`：不建目录，图片/附件 base64 内嵌，直接写单个 `{标题}.md` */
+  exportSingle: (id: number, parentDir: string, singleFile = false) =>
+    invoke<SingleExportResult>("export_single_note", { id, parentDir, singleFile }),
   /** T-020 导出单条笔记为 Word（.docx）；targetPath 是用户在 save dialog 选定的最终路径 */
   exportSingleToWord: (id: number, targetPath: string) =>
     invoke<WordExportResult>("export_single_note_to_word", { id, targetPath }),

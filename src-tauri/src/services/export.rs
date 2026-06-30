@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use tauri::{Emitter, Runtime};
 
+use base64::Engine;
+
 use crate::database::Database;
 use crate::error::AppError;
 use crate::models::{ExportProgress, ExportResult, SingleExportResult};
@@ -184,16 +186,18 @@ impl ExportService {
 
     /// 导出单篇笔记为 Markdown 文件
     ///
-    /// 行为：在用户选择的 `parent_dir` 下创建一层 `{标题}/` 子目录，里面放：
-    /// - `{标题}.md`：正文
-    /// - `assets/`：图片+附件
-    ///
-    /// 重名时自动加 `_1` / `_2` 后缀，避免覆盖已有目录。
+    /// 两种模式：
+    /// - `single_file = false`（原行为）：在 `parent_dir` 下建一层 `{标题}/` 子目录，
+    ///   里面放 `{标题}.md` + `assets/`（图片/附件拷贝为相对文件）。重名目录加 `_1`/`_2`。
+    /// - `single_file = true`：**不建任何目录**，把图片/附件 base64 内嵌进正文后，
+    ///   直接在 `parent_dir` 下写一个 `{标题}.md`（重名文件加 `_1`/`_2`）。
+    ///   满足"直接导出文件、不生成文件夹"。纯文字笔记两种模式都只产出一个 .md。
     pub fn export_single_note(
         db: &Database,
         instance_data_dir: &Path,
         note_id: i64,
         parent_dir: &str,
+        single_file: bool,
     ) -> Result<SingleExportResult, AppError> {
         // 单独 block 让 stmt/conn 在拷贝资产前及时释放 DB 锁
         let (title, content): (String, String) = {
@@ -214,16 +218,29 @@ impl ExportService {
             safe_title
         };
 
-        // 包一层目录：{parent_dir}/{basename}/
+        let canon_root = instance_data_dir
+            .canonicalize()
+            .unwrap_or_else(|_| instance_data_dir.to_path_buf());
+
+        if single_file {
+            // 单文件模式：图片/附件 base64 内嵌，直接写到 parent_dir，不建任何子目录
+            let (rewritten, inlined) = inline_assets_base64(&content, &canon_root);
+            let file_name = unique_md_file_name(parent, &basename);
+            let file_path = parent.join(&file_name);
+            std::fs::write(&file_path, rewritten)?;
+            return Ok(SingleExportResult {
+                root_dir: parent.to_string_lossy().to_string(),
+                file_path: file_path.to_string_lossy().to_string(),
+                assets_copied: inlined,
+            });
+        }
+
+        // 文件夹模式（原行为）：包一层目录 {parent_dir}/{basename}/
         let folder_name = unique_dir_name(parent, &basename);
         let root_dir = parent.join(&folder_name);
         std::fs::create_dir_all(&root_dir)?;
 
         let file_path = root_dir.join(format!("{}.md", basename));
-
-        let canon_root = instance_data_dir
-            .canonicalize()
-            .unwrap_or_else(|_| instance_data_dir.to_path_buf());
 
         // 资产目录统一叫 assets/（包了目录后命名可以更简洁）
         let (rewritten, copied) =
@@ -356,6 +373,90 @@ fn rewrite_assets_for_export(
     }
 
     (new_content, copied)
+}
+
+/// 单文件导出：把 content 中本地资产 URL 原地替换为 base64 data URI（图片/附件内嵌进 .md），
+/// 不拷贝文件、不建任何目录。返回 `(新 content, 内嵌资产数)`。
+/// 安全策略同 `rewrite_assets_for_export`：仅内嵌 instance 数据目录下的文件；远程/缺失链接原样保留。
+fn inline_assets_base64(content: &str, canon_instance_root: &Path) -> (String, usize) {
+    let spans = extract_md_url_spans(content);
+    if spans.is_empty() {
+        return (content.to_string(), 0);
+    }
+    let mut inlined = 0usize;
+    let mut cache: HashMap<PathBuf, String> = HashMap::new();
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+
+    for (start, end, url) in spans {
+        let abs = match crate::services::asset_path::resolve_content_url(&url, canon_instance_root) {
+            Some(p) => p,
+            None => continue, // 远程链接 / 未识别协议，原样保留
+        };
+        let canon_abs = match abs.canonicalize() {
+            Ok(p) => p,
+            Err(_) => continue, // 文件不存在，原样保留
+        };
+        if !canon_abs.starts_with(canon_instance_root) {
+            continue; // 安全：只内嵌实例数据目录下的文件
+        }
+        let data_uri = if let Some(u) = cache.get(&canon_abs) {
+            u.clone()
+        } else {
+            let bytes = match std::fs::read(&canon_abs) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let mime = guess_asset_mime(&canon_abs);
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let uri = format!("data:{};base64,{}", mime, b64);
+            cache.insert(canon_abs.clone(), uri.clone());
+            inlined += 1;
+            uri
+        };
+        replacements.push((start, end, data_uri));
+    }
+
+    // 倒序应用替换，避免下标错位
+    replacements.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut new_content = content.to_string();
+    for (s, e, uri) in replacements {
+        new_content.replace_range(s..e, &uri);
+    }
+    (new_content, inlined)
+}
+
+/// 资产 MIME 猜测：图片给 image/*，其余给 application/octet-stream（仍能随 .md 一起带走数据）
+fn guess_asset_mime(path: &Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
+/// 在 parent 下找一个尚未存在的 `{stem}.md`（重名加 `_1`/`_2`，保留 .md 扩展名）
+fn unique_md_file_name(parent: &Path, stem: &str) -> String {
+    let first = format!("{}.md", stem);
+    if !parent.join(&first).exists() {
+        return first;
+    }
+    for n in 1..10_000 {
+        let candidate = format!("{}_{}.md", stem, n);
+        if !parent.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    first
 }
 
 /// 扫描 content 中所有 URL 字节范围（图片/链接/HTML 属性）
