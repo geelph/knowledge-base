@@ -7,7 +7,7 @@
 //!
 //! 核心导出：
 //! - [`KbDb`] — 包装 rusqlite Connection（只读 / 读写两种模式）
-//! - [`KbServer`] — rmcp ServerHandler，挂载 12 个工具
+//! - [`KbServer`] — rmcp ServerHandler，挂载 27 个工具
 //!
 //! ## 简单用法
 //! ```ignore
@@ -70,6 +70,28 @@ impl KbDb {
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// 读 app_config 里的 MCP 工具白名单（key = `mcp_tool_whitelist`，value = JSON 字符串数组）。
+    /// 返回要**保留**的工具名集合；缺失 / 空数组 / 解析失败一律返回 `None` = 不过滤（保留全部）。
+    /// 供 sidecar（kb-mcp）与主应用 in-memory server 在构造 KbServer 时裁剪工具集（省 token）。
+    pub fn read_tool_whitelist(&self) -> Option<std::collections::HashSet<String>> {
+        let conn = self.conn.lock().ok()?;
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM app_config WHERE key = 'mcp_tool_whitelist'",
+                [],
+                |row| row.get(0),
+            )
+            .ok()?;
+        let names: Vec<String> = serde_json::from_str(&raw).ok()?;
+        let set: std::collections::HashSet<String> =
+            names.into_iter().filter(|s| !s.is_empty()).collect();
+        if set.is_empty() {
+            None
+        } else {
+            Some(set)
+        }
     }
 }
 
@@ -473,7 +495,7 @@ struct PromptDetail {
 
 // ─── MCP Server 实现 ─────────────────────────────────────────────
 
-/// MCP Server，挂载 12 个工具。`Clone` 因为 rmcp router 内部要 clone。
+/// MCP Server，挂载 27 个工具。`Clone` 因为 rmcp router 内部要 clone。
 #[derive(Clone)]
 pub struct KbServer {
     db: Arc<KbDb>,
@@ -488,13 +510,58 @@ pub struct KbServer {
 
 #[tool_router]
 impl KbServer {
-    /// 构造。`writable=false` 时所有写工具调用都会被 ensure_writable 拒掉。
+    /// 构造（保留全部 27 工具）。`writable=false` 时所有写工具调用都会被 ensure_writable 拒掉。
     pub fn new(db: KbDb, writable: bool) -> Self {
+        Self::new_filtered(db, writable, None)
+    }
+
+    /// 带工具白名单的构造：`keep` = 要**保留**的工具名集合（`None` / 空集 = 保留全部）。
+    /// 不在白名单里的工具直接从 router 移除 → `tools/list` 不再出现、也无法被调用，
+    /// 用于"按需裁剪工具集，给外部 agent / 自家 AI 省 token"（#5）。
+    /// `ping` 永远保留（健康检查）。
+    pub fn new_filtered(
+        db: KbDb,
+        writable: bool,
+        keep: Option<std::collections::HashSet<String>>,
+    ) -> Self {
+        let mut tool_router = Self::tool_router();
+        if let Some(keep) = keep {
+            if !keep.is_empty() {
+                let all_names: Vec<String> = tool_router
+                    .list_all()
+                    .into_iter()
+                    .map(|t| t.name.to_string())
+                    .collect();
+                for name in all_names {
+                    if name != "ping" && !keep.contains(&name) {
+                        tool_router.remove_route(&name);
+                    }
+                }
+            }
+        }
         Self {
             db: Arc::new(db),
             writable,
-            tool_router: Self::tool_router(),
+            tool_router,
         }
+    }
+
+    /// 全量工具目录（name, description），不依赖 db、不受白名单影响。
+    /// 供主应用设置页展示「27 个工具」清单做勾选裁剪——必须拿全集，
+    /// 不能用已被裁剪的 in-memory server 的 tools/list（那只剩保留项，无法再勾回）。
+    pub fn all_tools_catalog() -> Vec<(String, String)> {
+        Self::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| {
+                (
+                    t.name.to_string(),
+                    t.description
+                        .map(|d| d.to_string())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect()
     }
 
     /// 写工具入口的统一守卫

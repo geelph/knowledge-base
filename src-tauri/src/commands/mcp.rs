@@ -8,7 +8,7 @@
 //!     → SQL on shared db
 //!
 //! 看似绕了一圈，但好处：
-//!   1) 自家 AI 对话页和外部 Claude Desktop 用完全同一份工具实现（kb-core 12 工具）
+//!   1) 自家 AI 对话页和外部 Claude Desktop 用完全同一份工具实现（kb-core 27 工具）
 //!   2) 后续接外部 MCP server 时（GitHub / Filesystem / 高德地图…）可以走同样的 client API
 //!   3) 协议统一，UI 不需要区分"原生工具"和"外部工具"
 
@@ -336,7 +336,7 @@ pub struct McpToolInfo {
     pub input_schema: JsonValue,
 }
 
-/// 列出 in-memory MCP server 暴露的所有工具（kb-core 的 12 个）
+/// 列出 in-memory MCP server 暴露的所有工具（kb-core 的 27 个）
 #[tauri::command]
 pub async fn mcp_internal_list_tools(
     state: tauri::State<'_, AppState>,
@@ -368,7 +368,7 @@ pub async fn mcp_internal_list_tools(
 /// 调用 in-memory MCP server 的工具，返回 LLM 拿到的原始 JSON 字符串
 ///
 /// 前端传 arguments 用 JSON object（serde_json::Value::Object）；
-/// 返回 content 列表里的第一个 text block（kb-core 12 工具都返回单段 text）
+/// 返回 content 列表里的第一个 text block（kb-core 27 工具都返回单段 text）
 #[tauri::command]
 pub async fn mcp_internal_call_tool(
     state: tauri::State<'_, AppState>,
@@ -414,7 +414,7 @@ pub async fn mcp_internal_call_tool(
         .await
         .map_err(|e| format!("call_tool({name}) 失败: {e}"))?;
 
-    // 把 content 列表里的 text block 拼起来返回（12 工具都是单段 text）
+    // 把 content 列表里的 text block 拼起来返回（27 工具都是单段 text）
     let mut out = String::new();
     for c in &result.content {
         if let Some(text) = c.as_text() {
@@ -444,6 +444,55 @@ pub fn mcp_set_ai_writable(
     state
         .db
         .set_config(AI_WRITABLE_KEY, if enabled { "1" } else { "0" })
+        .map_err(|e| e.to_string())
+}
+
+// ─── #5: 工具白名单（按需裁剪工具集省 token，内部 + 外部都生效） ──────
+
+/// app_config 里持久化「保留哪些 MCP 工具」的 key。value = JSON 字符串数组。
+/// 空数组 / 缺失 = 不过滤（保留全部 27 个）。
+const TOOL_WHITELIST_KEY: &str = "mcp_tool_whitelist";
+
+/// 工具目录条目（给设置页勾选用）
+#[derive(Serialize)]
+pub struct McpToolCatalogItem {
+    pub name: String,
+    pub description: String,
+}
+
+/// 全量工具目录（27 个，name + description），不受白名单影响。
+/// 设置页用它渲染勾选清单——必须拿全集，不能用已裁剪的 in-memory tools/list。
+#[tauri::command]
+pub fn mcp_list_all_tools() -> Vec<McpToolCatalogItem> {
+    kb_core::KbServer::all_tools_catalog()
+        .into_iter()
+        .map(|(name, description)| McpToolCatalogItem { name, description })
+        .collect()
+}
+
+/// 读当前工具白名单（保留哪些工具）。空数组 = 不过滤（全部 27 个）。
+#[tauri::command]
+pub fn mcp_get_tool_whitelist(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    match state.db.get_config(TOOL_WHITELIST_KEY) {
+        Ok(Some(v)) => serde_json::from_str(&v).map_err(|e| e.to_string()),
+        Ok(None) => Ok(vec![]),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 设置工具白名单（保留哪些工具）。空数组 = 清除过滤、保留全部。
+/// 生效时机：自家 AI 对话 = 重启应用；外部客户端 = 重连 kb-mcp（无需改客户端配置）。
+#[tauri::command]
+pub fn mcp_set_tool_whitelist(
+    state: tauri::State<'_, AppState>,
+    tools: Vec<String>,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&tools).map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_config(TOOL_WHITELIST_KEY, &json)
         .map_err(|e| e.to_string())
 }
 

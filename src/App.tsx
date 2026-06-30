@@ -99,6 +99,33 @@ function App() {
     };
   }, []);
 
+  // 监听 db:external-changed：外部 agent（kb-mcp 独立进程）或内置 AI 的 in-memory MCP
+  // 写入笔记/任务后，Rust 侧后台 watcher 轮询 PRAGMA data_version 侦测到变化并 emit 此事件。
+  // 前端据此静默重拉各列表（不弹 message，避免外部频繁写入时刷屏）。
+  useEffect(() => {
+    if (!IS_MAIN_WINDOW) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listen("db:external-changed", () => {
+      const s = useAppStore.getState();
+      s.bumpNotesRefresh();
+      s.bumpFoldersRefresh();
+      s.bumpTagsRefresh();
+      s.bumpTasksListRefresh();
+      void s.refreshTaskStats();
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // 紧急窗口（独立 webview）改完任务后通过 Tauri 事件通知主窗刷新列表/角标。
   // Zustand store 是 per-webview 的，子窗口 set state 主窗拿不到，所以必须走事件桥。
   useEffect(() => {

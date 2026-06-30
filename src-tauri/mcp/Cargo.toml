@@ -1,6 +1,6 @@
 [package]
 name = "kb-mcp"
-version = "0.1.0"
+version = "1.0.0"
 description = "Knowledge Base MCP Server - 把本地知识库以 MCP 协议暴露给 Claude Desktop / Cursor / Cherry Studio 等 LLM 客户端"
 authors = ["抓蛙师"]
 edition = "2021"
@@ -11,7 +11,7 @@ name = "kb-mcp"
 path = "src/main.rs"
 
 [dependencies]
-# kb-core：KbDb + KbServer + 12 工具的实现，与主应用共享
+# kb-core：KbDb + KbServer + 27 工具的实现，与主应用共享
 kb-core = { path = "../kb-core" }
 # rmcp 这边只需要 stdio transport + ServiceExt trait（server feature 间接通过 kb-core 拉到了）
 rmcp = { version = "1.5", features = ["server", "transport-io"] }

@@ -19,6 +19,7 @@ import {
   Input,
   Popconfirm,
   Divider,
+  Checkbox,
 } from "antd";
 import {
   CheckCircleFilled,
@@ -85,6 +86,11 @@ interface McpToolInfo {
 export function MCPServerSection() {
   const [info, setInfo] = useState<McpRuntimeInfo | null>(null);
   const [tools, setTools] = useState<McpToolInfo[]>([]);
+  // #5 工具白名单裁剪：全量目录(27) + 当前启用集合
+  const [allTools, setAllTools] = useState<{ name: string; description: string }[]>([]);
+  const [enabledTools, setEnabledTools] = useState<Set<string>>(new Set());
+  const [whitelistDirty, setWhitelistDirty] = useState(false);
+  const [savingWhitelist, setSavingWhitelist] = useState(false);
   const [loading, setLoading] = useState(false);
   const [pinging, setPinging] = useState(false);
   const [pingResult, setPingResult] = useState<string | null>(null);
@@ -102,19 +108,58 @@ export function MCPServerSection() {
   async function load() {
     setLoading(true);
     try {
-      const [i, t, tpl] = await Promise.all([
+      const [i, t, tpl, all, keep] = await Promise.all([
         invoke<McpRuntimeInfo>("mcp_runtime_info"),
         invoke<McpToolInfo[]>("mcp_internal_list_tools").catch(() => [] as McpToolInfo[]),
         invoke<ClaudeCodeTemplate>("mcp_get_claude_md_template").catch(() => null),
+        invoke<{ name: string; description: string }[]>("mcp_list_all_tools").catch(
+          () => [] as { name: string; description: string }[],
+        ),
+        invoke<string[]>("mcp_get_tool_whitelist").catch(() => [] as string[]),
       ]);
       setInfo(i);
       setTools(t);
       setClaudeCodeTpl(tpl);
+      setAllTools(all);
+      // 白名单为空 = 不过滤（全部启用）；否则启用集合 = 白名单
+      setEnabledTools(
+        new Set(keep.length ? keep : all.map((x) => x.name)),
+      );
+      setWhitelistDirty(false);
     } catch (e) {
       message.error(`加载 MCP 信息失败: ${e}`);
     } finally {
       setLoading(false);
     }
+  }
+
+  // #5 保存工具白名单。全选 = 存空数组（不过滤）；否则存启用的工具名。
+  async function saveWhitelist() {
+    setSavingWhitelist(true);
+    try {
+      const enabled = Array.from(enabledTools);
+      const payload = enabled.length === allTools.length ? [] : enabled;
+      await invoke("mcp_set_tool_whitelist", { tools: payload });
+      setWhitelistDirty(false);
+      message.success(
+        "已保存。自家 AI 对话重启应用后生效；外部客户端重连 kb-mcp 后生效",
+      );
+    } catch (e) {
+      message.error(`保存失败: ${e}`);
+    } finally {
+      setSavingWhitelist(false);
+    }
+  }
+
+  function toggleTool(name: string, checked: boolean) {
+    setEnabledTools((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(name);
+      else next.delete(name);
+      next.add("ping"); // ping 始终保留（健康检查）
+      return next;
+    });
+    setWhitelistDirty(true);
   }
 
   // CLAUDE.md「另存为...」：弹文件对话框选目录
@@ -518,43 +563,97 @@ export function MCPServerSection() {
             </div>
           )}
 
-          {/* ─── 12 工具列表（折叠） ─────────────────── */}
+          {/* ─── 工具清单 + 白名单裁剪（#5：勾选保留哪些，省 token） ─────── */}
           <Collapse
             size="small"
             items={[
               {
                 key: "tools",
-                label: `内置工具 · ${tools.length} 个（kb-core 实现，sidecar 与自家 AI 对话页共享）`,
-                children: tools.length === 0 ? (
+                label: `内置工具 · 共 ${allTools.length} 个（勾选保留哪些，裁剪可给外部 agent / 自家 AI 省 token）`,
+                children: allTools.length === 0 ? (
                   <Empty description="未加载到工具" />
                 ) : (
-                  <List
-                    size="small"
-                    dataSource={tools}
-                    renderItem={(t) => (
-                      <List.Item>
-                        <List.Item.Meta
-                          title={
-                            <Space>
-                              <code style={{ fontSize: 13 }}>{t.name}</code>
-                              {t.name.startsWith("create_") ||
-                              t.name.startsWith("update_") ||
-                              t.name.startsWith("add_") ? (
-                                <Tag color="orange">写</Tag>
-                              ) : (
-                                <Tag color="blue">读</Tag>
-                              )}
-                            </Space>
-                          }
-                          description={
-                            <Text style={{ fontSize: 12 }} type="secondary">
-                              {t.description || "（无说明）"}
-                            </Text>
-                          }
-                        />
-                      </List.Item>
-                    )}
-                  />
+                  <div>
+                    <Space style={{ marginBottom: 8 }} wrap>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setEnabledTools(new Set(allTools.map((x) => x.name)));
+                          setWhitelistDirty(true);
+                        }}
+                      >
+                        全选
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setEnabledTools(new Set(["ping"]));
+                          setWhitelistDirty(true);
+                        }}
+                      >
+                        仅保留 ping
+                      </Button>
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={savingWhitelist}
+                        disabled={!whitelistDirty}
+                        onClick={() => void saveWhitelist()}
+                      >
+                        保存裁剪
+                      </Button>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        已选 {enabledTools.size}/{allTools.length}
+                      </Text>
+                    </Space>
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 8 }}
+                      message="生效时机：自家 AI 对话重启应用后生效；外部客户端（Claude Desktop 等）重连 kb-mcp 后生效，无需改客户端配置。全选 = 不裁剪。"
+                    />
+                    <List
+                      size="small"
+                      dataSource={allTools}
+                      renderItem={(t) => {
+                        const isWrite =
+                          t.name.startsWith("create_") ||
+                          t.name.startsWith("update_") ||
+                          t.name.startsWith("add_") ||
+                          t.name.startsWith("delete_") ||
+                          t.name.startsWith("remove_") ||
+                          t.name.startsWith("restore_") ||
+                          t.name.startsWith("move_");
+                        return (
+                          <List.Item>
+                            <div style={{ width: "100%" }}>
+                              <Checkbox
+                                checked={enabledTools.has(t.name)}
+                                disabled={t.name === "ping"}
+                                onChange={(e) =>
+                                  toggleTool(t.name, e.target.checked)
+                                }
+                              >
+                                <Space>
+                                  <code style={{ fontSize: 13 }}>{t.name}</code>
+                                  {isWrite ? (
+                                    <Tag color="orange">写</Tag>
+                                  ) : (
+                                    <Tag color="blue">读</Tag>
+                                  )}
+                                </Space>
+                              </Checkbox>
+                              <div style={{ marginLeft: 24 }}>
+                                <Text style={{ fontSize: 12 }} type="secondary">
+                                  {t.description || "（无说明）"}
+                                </Text>
+                              </div>
+                            </div>
+                          </List.Item>
+                        );
+                      }}
+                    />
+                  </div>
                 ),
               },
             ]}

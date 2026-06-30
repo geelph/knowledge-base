@@ -68,6 +68,17 @@ impl Database {
             .map_err(|e| AppError::Custom(e.to_string()))
     }
 
+    /// 读 SQLite 的 `PRAGMA data_version`。
+    ///
+    /// 该值在**其他连接**（含其他进程，如独立的 kb-mcp.exe，或 in-memory MCP 的独立连接）
+    /// 写入本 db 后递增；而**本连接自身**的写入不会改变它。正好用来侦测「外部写入」——
+    /// 用于后台 watcher 轮询，外部 agent 改了笔记/任务后通知前端刷新列表。
+    pub fn data_version(&self) -> Result<i64, AppError> {
+        let conn = self.conn_lock()?;
+        let v: i64 = conn.pragma_query_value(None, "data_version", |row| row.get(0))?;
+        Ok(v)
+    }
+
     /// 临时释放对 db 文件的所有占用：把 Connection 切到 `:memory:`，
     /// 让旧 connection（含 mmap + 文件句柄）被 drop。
     ///

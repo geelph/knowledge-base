@@ -4,7 +4,7 @@
 //! 1. CLI 解析 db_path / writable
 //! 2. 委托给 kb_core::KbServer 跑 stdio
 //!
-//! 业务（KbDb / KbServer / 12 工具 / SQL）全部在 kb-core crate，
+//! 业务（KbDb / KbServer / 27 工具 / SQL）全部在 kb-core crate，
 //! 主应用 (knowledge_base) 也通过同一份 kb-core 跑 in-memory MCP server。
 
 use std::path::PathBuf;
@@ -54,7 +54,13 @@ async fn main() -> Result<()> {
     }
 
     let db = KbDb::open(&cli.db_path, cli.writable)?;
-    let server = KbServer::new(db, cli.writable);
+    // 工具白名单（#5）：从主应用 app_config 读「保留哪些工具」，裁剪掉其余的省 token。
+    // 主应用设置页改白名单后，外部客户端重连本 sidecar 即生效（无需改 Claude Desktop 配置）。
+    let keep = db.read_tool_whitelist();
+    if let Some(ref k) = keep {
+        eprintln!("[kb-mcp] tool whitelist active: keep {} tools (+ping)", k.len());
+    }
+    let server = KbServer::new_filtered(db, cli.writable, keep);
 
     // serve(stdio()) 接管 stdin/stdout，按 JSON-RPC 帧收发
     let service = server

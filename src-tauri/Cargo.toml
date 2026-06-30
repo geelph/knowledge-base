@@ -3,7 +3,7 @@
 # 主 package（knowledge_base）仍然是 root member，原有 cargo build 行为不变。
 # kb-mcp 完全独立、不依赖主包，避免被 cdylib + tauri 牵扯，编译出独立 binary。
 [workspace]
-# kb-core: 共享 lib，KbDb + KbServer + 12 个工具实现，主应用和 kb-mcp 都依赖它
+# kb-core: 共享 lib，KbDb + KbServer + 27 个工具实现，主应用和 kb-mcp 都依赖它
 # mcp: stdio MCP server binary，依赖 kb-core
 members = ["kb-core", "mcp"]
 
@@ -79,7 +79,7 @@ rand = "0.8"
 # chardetng / encoding_rs 是纯 Rust 编码识别工具，移动端可编译
 chardetng = "0.1"
 encoding_rs = "0.8"
-# kb-core: 共享的 MCP server 实现（KbDb + KbServer + 12 工具），
+# kb-core: 共享的 MCP server 实现（KbDb + KbServer + 27 工具），
 # 主应用在进程内 spawn KbServer，让自家 AI 对话页通过 MCP 协议消费同一套工具
 kb-core = { path = "kb-core" }
 # rmcp client：in-memory transport 调用同进程 KbServer（双端通用）

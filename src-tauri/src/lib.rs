@@ -129,7 +129,9 @@ fn setup_internal_mcp(
 
         let kb_db = kb_core::KbDb::open(&db_path, /* writable */ true)
             .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e.to_string()))?;
-        let kb_server = kb_core::KbServer::new(kb_db, /* writable */ true);
+        // 工具白名单（#5）：构造时按 app_config 裁剪工具集（改白名单后重启应用生效）
+        let keep = kb_db.read_tool_whitelist();
+        let kb_server = kb_core::KbServer::new_filtered(kb_db, /* writable */ true, keep);
 
         // 后台 task：跑 server，永远不退出（除非 client 断开）
         tauri::async_runtime::spawn(async move {
@@ -378,6 +380,41 @@ fn start_md_deliver_watcher(handle: tauri::AppHandle, app_data_dir: PathBuf) {
                 let _ = win.unminimize();
                 let _ = win.show();
                 let _ = win.set_focus();
+            }
+        }
+    });
+}
+
+/// 侦测「外部写入」并通知前端刷新列表（修复：外部 agent 写笔记后列表不刷新）。
+///
+/// 背景：外部 agent 通过 kb-mcp.exe（独立进程）或自家 AI 的 in-memory MCP（独立连接）
+/// 写笔记/任务后，前端列表不会自动刷新（用户需切走再切回才更新）。这些写入都不经前端 IPC，
+/// 无法在写入处 bump 前端的 refreshTick。
+///
+/// 方案：用 `PRAGMA data_version` 轮询。该值只在**其他连接**写库后递增（主连接 state.db 自身
+/// 写入不变），因此能跨进程侦测外部 kb-mcp 写入、以及 in-memory MCP（独立连接）写入；
+/// 前端 IPC 走主连接、自身写入不触发轮询 → 不会与前端就地 bump 造成重复刷新。
+/// 轮询极轻（单条 pragma 读、无表扫描），间隔 1.5s。
+fn start_db_change_watcher(handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // 基线：读不到就用 0（首轮可能多发一次 emit，无害）
+        let mut last: i64 = handle
+            .try_state::<AppState>()
+            .and_then(|s| s.db.data_version().ok())
+            .unwrap_or(0);
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            let Some(state) = handle.try_state::<AppState>() else {
+                continue;
+            };
+            let cur = match state.db.data_version() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if cur != last {
+                last = cur;
+                // 外部写入可能改了笔记/文件夹/标签/任务任意一种 → 让相关列表都重拉
+                let _ = handle.emit("db:external-changed", ());
             }
         }
     });
@@ -703,7 +740,7 @@ pub fn run() {
                     None
                 },
                 |c| {
-                    log::info!("[mcp-internal] in-memory MCP server 就绪（kb-core 12 工具）");
+                    log::info!("[mcp-internal] in-memory MCP server 就绪（kb-core 27 工具）");
                     Some(c)
                 },
             );
@@ -819,6 +856,10 @@ pub fn run() {
                 services::push::scheduler::run_push_loop(app_handle_push).await;
             });
 
+            // 外部写入侦测：外部 agent（kb-mcp 独立进程）/ in-memory MCP 写笔记后，
+            // 轮询 PRAGMA data_version 感知变化并 emit("db:external-changed")，前端据此刷新列表。
+            start_db_change_watcher(app.handle().clone());
+
             // setup 末尾再 show + set_focus 抢焦点：
             // - 主窗已在 setup 第一步 show 过，这里 show 是幂等的
             // - 真正作用是 set_focus：迁移 splash 关闭后 / 多窗口创建后把焦点拉回主窗
@@ -847,9 +888,13 @@ pub fn run() {
         })
         // ─── Command 注册 ───────────────────────────
         .invoke_handler(tauri::generate_handler![
-            // MCP 内置 server（kb-core 12 工具）
+            // MCP 内置 server（kb-core 27 工具）
             commands::mcp::mcp_internal_list_tools,
             commands::mcp::mcp_internal_call_tool,
+            // #5 工具白名单（按需裁剪工具集省 token）
+            commands::mcp::mcp_list_all_tools,
+            commands::mcp::mcp_get_tool_whitelist,
+            commands::mcp::mcp_set_tool_whitelist,
             commands::mcp::mcp_runtime_info,
             commands::mcp::mcp_get_claude_md_template,
             commands::mcp::mcp_list_servers,

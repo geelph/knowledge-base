@@ -8,7 +8,7 @@ use crate::database::Database;
 use crate::services::vault::VaultState;
 
 /// In-memory MCP client：通过 tokio::io::duplex 与同进程内的 KbServer 通信。
-/// 让主应用代码也能用统一的 MCP 协议消费 12 工具，而不是直接调 services::*。
+/// 让主应用代码也能用统一的 MCP 协议消费 27 工具，而不是直接调 services::*。
 /// 使用 RoleClient 角色，handler 用 () 表示不响应 server-initiated 请求。
 pub type InternalMcpClient = rmcp::service::RunningService<rmcp::RoleClient, ()>;
 

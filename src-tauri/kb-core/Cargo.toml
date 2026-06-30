@@ -1,6 +1,6 @@
 [package]
 name = "kb-core"
-version = "0.1.0"
+version = "1.0.0"
 description = "Knowledge Base MCP Server core - 抽离自 kb-mcp，让主应用也能 in-process 复用同一份工具实现"
 authors = ["抓蛙师"]
 edition = "2021"
