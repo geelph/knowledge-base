@@ -14,6 +14,7 @@ import ruoyiLogo from "@/assets/promo/ruoyi.png";
 import tauriLogo from "@/assets/promo/tauri.svg";
 import workstationLogo from "@/assets/promo/workstation.svg";
 import agileshotLogo from "@/assets/promo/agileshot.png";
+import storyloomLogo from "@/assets/promo/storyloom.png";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -31,6 +32,7 @@ export function RecommendCards() {
   const [sigilOpen, setSigilOpen] = useState(false);
   const [reeveOpen, setReeveOpen] = useState(false);
   const [agileshotOpen, setAgileshotOpen] = useState(false);
+  const [storyloomOpen, setStoryloomOpen] = useState(false);
 
   const cardStyle: React.CSSProperties = {
     padding: "12px 16px",
@@ -181,6 +183,26 @@ export function RecommendCards() {
           <br />
           <Text type="secondary" style={{ fontSize: 11 }}>
             AI 时代的桌面截图与标注工具
+          </Text>
+        </div>
+        <RightOutlined style={{ fontSize: 11, color: "var(--ant-color-text-quaternary)" }} />
+      </div>
+
+      {/* 推荐：StoryLoom */}
+      <div
+        onClick={() => setStoryloomOpen(true)}
+        style={cardStyle}
+        onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--ant-color-primary)")}
+        onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--ant-color-border)")}
+      >
+        <img src={storyloomLogo} alt="" style={{ width: 22, height: 22, objectFit: "contain" }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Text strong style={{ fontSize: 13 }}>
+            StoryLoom · 故事织机
+          </Text>
+          <br />
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            面向网文作者的本地 AI 创作工作台
           </Text>
         </div>
         <RightOutlined style={{ fontSize: 11, color: "var(--ant-color-text-quaternary)" }} />
@@ -677,6 +699,90 @@ export function RecommendCards() {
         <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
           <Button type="link" size="small" onClick={() => openUrl("https://www.bilibili.com/video/BV1uQ7k6nEvq")}>
             B站介绍
+          </Button>
+        </div>
+      </Modal>
+
+      {/* StoryLoom 详情弹窗 */}
+      <Modal
+        title={null}
+        open={storyloomOpen}
+        onCancel={() => setStoryloomOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setStoryloomOpen(false)}>关闭</Button>,
+          <Button key="site" type="primary" onClick={() => openUrl("https://storyloom.ruoyi.plus")}>
+            访问官网
+          </Button>,
+        ]}
+        width={520}
+      >
+        <div style={{ textAlign: "center", paddingTop: 8, paddingBottom: 12 }}>
+          <img src={storyloomLogo} alt="" style={{ width: 44, height: 44, objectFit: "contain" }} />
+          <Title level={4} style={{ margin: "12px 0 4px" }}>
+            StoryLoom · 故事织机
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+            面向网文作者的本地 AI 创作工作台
+          </Paragraph>
+          <div style={{ display: "flex", justifyContent: "center", gap: 24 }}>
+            {[
+              ["100% 本地", "Key 不出本机"],
+              ["Story Bible", "一致性资产"],
+              ["多供应商", "云 API 可切换"],
+            ].map(([num, label]) => (
+              <div key={label} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ant-color-primary)" }}>
+                  {num}
+                </div>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {label}
+                </Text>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginBottom: 8 }}>
+            <Tag color="orange">Tauri 2.x</Tag>
+            <Tag color="blue">Rust</Tag>
+            <Tag color="green">React 19</Tag>
+            <Tag color="cyan">TypeScript</Tag>
+            <Tag color="purple">SQLite</Tag>
+          </div>
+
+          {[
+            ["AI 辅助创作", "大纲生成、续写、扩写、润色、卡文救场，多供应商云 API 流式输出"],
+            ["Story Bible 故事圣经", "角色卡、世界观词条、时间线，把角色与设定沉淀为一致性资产"],
+            ["一致性守护", "写作时引用设定、自动检测前后矛盾，长篇连载不崩人设"],
+            ["本地优先 · 隐私安全", "本地 SQLite + 文件存储，云算力经 Rust Command 代理，API Key 不出本机"],
+          ].map(([title, desc]) => (
+            <div
+              key={title}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 6,
+                background: "var(--ant-color-bg-layout)",
+                border: "1px solid var(--ant-color-border)",
+              }}
+            >
+              <Text strong style={{ fontSize: 13 }}>
+                {title}
+              </Text>
+              <br />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {desc}
+              </Text>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          <Button type="link" size="small" onClick={() => openUrl("https://www.bilibili.com/video/BV1S4Tu6cE55")}>
+            B站介绍
+          </Button>
+          <Button type="link" size="small" onClick={() => openUrl("https://storyloom.ruoyi.plus")}>
+            官网
           </Button>
         </div>
       </Modal>
