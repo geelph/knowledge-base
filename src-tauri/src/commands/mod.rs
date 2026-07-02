@@ -18,6 +18,8 @@ pub mod mcp;
 #[cfg(mobile)]
 pub mod mobile_update;
 pub mod notes;
+#[cfg(desktop)]
+pub mod ocr;
 pub mod orphan;
 pub mod pdf;
 pub mod projects;

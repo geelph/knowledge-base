@@ -65,6 +65,7 @@ import { ShortcutsSection } from "@/components/settings/ShortcutsSection";
 import { EditorHighlightShortcutRow } from "@/components/settings/EditorHighlightShortcutRow";
 import { MCPServerSection } from "@/components/settings/MCPServerSection";
 import { ScriptSection } from "@/components/settings/ScriptSection";
+import { OcrSection } from "@/components/settings/OcrSection";
 import { TiptapEditor } from "@/components/editor";
 import { ShareConfigModal } from "@/components/config-share/ShareConfigModal";
 import { ImportConfigModal } from "@/components/config-share/ImportConfigModal";
@@ -273,6 +274,7 @@ const SETTINGS_NAV_ITEMS: { id: string; label: string }[] = [
   { id: "settings-sync", label: "同步备份" },
   { id: "settings-mcp", label: "MCP 服务器" },
   { id: "settings-scripts", label: "脚本插件" },
+  { id: "settings-ocr", label: "本地 OCR" },
   { id: "settings-orphan-assets", label: "孤儿素材清理" },
   { id: "settings-community", label: "作者 & 社区" },
 ];
@@ -2374,6 +2376,9 @@ function DesktopSettingsPage() {
 
       {/* #8 Phase 2 脚本插件：Rhai 文本转换脚本 */}
       <ScriptSection />
+
+      {/* #9 本地 OCR：图片 / 扫描件 PDF 识别 */}
+      <OcrSection />
 
       {/* 维护：孤儿素材清理（5 类素材统一） */}
       <Card

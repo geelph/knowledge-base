@@ -1085,6 +1085,17 @@ export const dataviewApi = {
     }),
 };
 
+/** #9 本地 OCR API（RapidOCR sidecar，仅桌面端可用） */
+export const ocrApi = {
+  /** 本地 OCR 引擎是否随安装包分发（不可用时前端应隐藏/禁用 OCR 入口） */
+  available: () => invoke<boolean>("ocr_available"),
+  /** 识别单张图片文件的文字 */
+  image: (path: string) => invoke<string>("ocr_image", { path }),
+  /** 识别扫描件 PDF（逐页渲染 + OCR + 拼接）；maxPages 缺省 30 */
+  pdf: (path: string, maxPages?: number) =>
+    invoke<string>("ocr_pdf", { path, maxPages: maxPages ?? null }),
+};
+
 /** #8 Phase 2 脚本插件 API（Rhai 文本转换脚本） */
 export const scriptApi = {
   list: () => invoke<Script[]>("script_list"),

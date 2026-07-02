@@ -699,6 +699,22 @@ pub fn run() {
                     },
                     Err(e) => log::warn!("PDFium 资源路径解析失败: {}", e),
                 }
+
+                // #9 本地 OCR 引擎路径解析（RapidOCR-json sidecar，桌面端）。
+                // 解析成功且文件存在才注入 Some；缺失时 OCR 命令会报"引擎不可用"。
+                let ocr_exe = app
+                    .path()
+                    .resolve(
+                        "resources/ocr/RapidOCR-json.exe",
+                        tauri::path::BaseDirectory::Resource,
+                    )
+                    .ok()
+                    .filter(|p| p.exists());
+                match &ocr_exe {
+                    Some(p) => log::info!("[ocr] 本地 OCR 引擎就绪: {}", p.display()),
+                    None => log::info!("[ocr] 本地 OCR 引擎未随包分发（OCR 功能不可用）"),
+                }
+                services::ocr::set_engine_path(ocr_exe);
             }
 
             match services::source_file::SourceFileService::ensure_dir(&data_dir_root) {
@@ -914,6 +930,13 @@ pub fn run() {
             commands::script::script_set_enabled,
             commands::script::script_run_preview,
             commands::script::script_run,
+            // #9 本地 OCR（RapidOCR sidecar，仅桌面端）
+            #[cfg(desktop)]
+            commands::ocr::ocr_available,
+            #[cfg(desktop)]
+            commands::ocr::ocr_image,
+            #[cfg(desktop)]
+            commands::ocr::ocr_pdf,
             // 外部 MCP server 子进程仅桌面端
             #[cfg(desktop)]
             commands::mcp::mcp_external_list_tools,

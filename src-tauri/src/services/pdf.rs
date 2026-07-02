@@ -343,6 +343,54 @@ fn extract_with_pdfium(source: &Path) -> Result<String, String> {
     Ok(pages_text.join("\n\n"))
 }
 
+/// 把 PDF 每页渲染成 PNG 写到 `out_dir`，返回生成的 PNG 路径（按页序）。
+/// 供 OCR 扫描件用（无文本层的 PDF 先转图再识别）。`max_pages` 限制页数防超大 PDF 卡死。
+/// 仅桌面端：依赖 PDFium。
+#[cfg(desktop)]
+pub fn render_pdf_to_pngs(
+    source: &Path,
+    out_dir: &Path,
+    max_pages: usize,
+) -> Result<Vec<PathBuf>, String> {
+    let mutex = PDFIUM
+        .get()
+        .ok_or_else(|| "PDFium 未初始化（dll 加载失败）".to_string())?;
+    let guard = mutex.lock().map_err(|e| format!("PDFium 锁被毒化: {e}"))?;
+    let pdfium = &guard.0;
+
+    let doc = pdfium
+        .load_pdf_from_file(source, None)
+        .map_err(|e| format!("PDFium 打开 PDF 失败: {e}"))?;
+
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("创建 OCR 临时目录失败: {e}"))?;
+
+    // 目标宽度 1600px：对 OCR 足够清晰，又不至于让大页面渲染爆内存
+    let config = PdfRenderConfig::new()
+        .set_target_width(1600)
+        .set_maximum_height(2400);
+
+    let mut out = Vec::new();
+    for (idx, page) in doc.pages().iter().enumerate() {
+        if idx >= max_pages {
+            log::warn!(
+                "[ocr] PDF 页数超过上限 {}，仅识别前 {} 页",
+                max_pages,
+                max_pages
+            );
+            break;
+        }
+        let bitmap = page
+            .render_with_config(&config)
+            .map_err(|e| format!("渲染第 {} 页失败: {e}", idx + 1))?;
+        let img = bitmap.as_image();
+        let png_path = out_dir.join(format!("page_{:04}.png", idx));
+        img.save(&png_path)
+            .map_err(|e| format!("保存第 {} 页 PNG 失败: {e}", idx + 1))?;
+        out.push(png_path);
+    }
+    Ok(out)
+}
+
 /// 用 `catch_unwind` 包裹 pdf_extract::extract_text，把 panic 也转成普通错误返回
 fn safe_extract_text(path: &Path) -> Result<String, String> {
     let path = path.to_path_buf();
