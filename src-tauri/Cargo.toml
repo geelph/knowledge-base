@@ -26,6 +26,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# #9 macOS 零二进制 OCR：build.rs 用 cc 编译 mac/ocr_vision.m（Apple Vision FFI）。
+# cc 是纯 Rust、体积极小；仅当 target_os=macos 时 build.rs 才实际调用它编译 .m。
+cc = "1"
 
 [dependencies]
 # ─── 跨平台核心依赖（桌面 + 移动端共用）────────────────

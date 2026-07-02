@@ -39,6 +39,9 @@ pub mod mcp_client;
 pub mod note;
 #[cfg(desktop)]
 pub mod ocr;
+// macOS 零二进制 OCR（Apple Vision FFI）；仅 macOS 编译
+#[cfg(target_os = "macos")]
+pub mod mac_ocr;
 pub mod orphan_scan;
 pub mod pdf;
 // 笔记 pop-out 窗口仅桌面端（移动端改 Modal）

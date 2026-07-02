@@ -202,13 +202,30 @@ pub fn set_engine_path(path: Option<PathBuf>) {
     let _ = ENGINE_PATH.set(path);
 }
 
-/// OCR 引擎是否可用（bundle 里有 exe）。
+/// OCR 是否可用。macOS：系统 Apple Vision（零二进制）可用即算可用；否则看 sidecar 引擎是否 bundle。
 pub fn is_available() -> bool {
+    // macOS：优先系统原生 Vision（无需任何 bundle 二进制）
+    #[cfg(target_os = "macos")]
+    {
+        if crate::services::mac_ocr::available() {
+            return true;
+        }
+    }
     matches!(ENGINE_PATH.get(), Some(Some(p)) if p.exists())
 }
 
-/// 识别一张图片文件，返回全文。会懒启动/自动重启常驻引擎。
+/// 识别一张图片文件，返回全文。
+/// macOS：优先系统原生 Apple Vision（零二进制、in-process）；不可用时回退 RapidOCR sidecar。
+/// Windows/Linux：走 RapidOCR sidecar（懒启动/自动重启常驻引擎）。
 pub fn recognize_image(image_path: &Path) -> Result<String, String> {
+    // macOS 零二进制路径：系统 Vision 可用就直接用，无需常驻进程
+    #[cfg(target_os = "macos")]
+    {
+        if crate::services::mac_ocr::available() {
+            return crate::services::mac_ocr::recognize(image_path);
+        }
+    }
+
     let path = match ENGINE_PATH.get() {
         Some(Some(p)) if p.exists() => p.clone(),
         _ => return Err("本地 OCR 引擎不可用（未随安装包分发）".to_string()),

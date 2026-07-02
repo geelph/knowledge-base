@@ -3035,6 +3035,7 @@ dependencies = [
  "argon2",
  "base64 0.22.1",
  "calamine",
+ "cc",
  "chardetng",
  "chrono",
  "docx-rs",
