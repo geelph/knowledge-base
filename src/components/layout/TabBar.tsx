@@ -118,21 +118,10 @@ export function TabBar() {
     }
   }, [activeId, tabs.length]);
 
-  if (tabs.length === 0) return null;
-
-  const menuFor = (id: number): MenuProps["items"] => [
-    { key: "close", label: "关闭" },
-    { key: "close-others", label: "关闭其他", disabled: tabs.length === 1 },
-    {
-      key: "close-right",
-      label: "关闭右侧",
-      disabled: tabs.findIndex((t) => t.id === id) >= tabs.length - 1,
-    },
-    { type: "divider" },
-    { key: "close-all", label: "关闭全部", disabled: tabs.length === 0 },
-  ];
-
-  /** 关闭全部：清空所有 tab；若正在看某笔记则跳回列表。有未保存草稿时先确认。 */
+  /** 关闭全部：清空所有 tab；若正在看某笔记则跳回列表。有未保存草稿时先确认。
+   *  🔴 必须放在下方 `if (tabs.length === 0) return null` 这个 early return **之前**——
+   *  否则无 tab 时提前 return 会跳过这个 useCallback，导致两次渲染 hook 数量不一致
+   *  （"Rendered more hooks than during the previous render" 崩溃）。 */
   const handleCloseAll = useCallback(() => {
     const doIt = () => {
       const viewingNote = location.pathname.startsWith("/notes/");
@@ -154,6 +143,20 @@ export function TabBar() {
       doIt();
     }
   }, [tabs, closeAllTabs, navigate, location.pathname]);
+
+  if (tabs.length === 0) return null;
+
+  const menuFor = (id: number): MenuProps["items"] => [
+    { key: "close", label: "关闭" },
+    { key: "close-others", label: "关闭其他", disabled: tabs.length === 1 },
+    {
+      key: "close-right",
+      label: "关闭右侧",
+      disabled: tabs.findIndex((t) => t.id === id) >= tabs.length - 1,
+    },
+    { type: "divider" },
+    { key: "close-all", label: "关闭全部", disabled: tabs.length === 0 },
+  ];
 
   function onMenuClick(id: number, key: string) {
     if (key === "close") handleClose(id);
