@@ -568,10 +568,11 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 | 项目 | 值 |
 |------|-----|
-| **前端开发地址** | `http://localhost:1420` |
-| **MCP chrome-devtools** | 使用 `http://localhost:1420` 访问应用页面 |
+| **前端 dev 地址** | 以本项目 `src-tauri/tauri.conf.json` 的 `devUrl` 为准（等于 `vite.config.ts` 的 `server.port`，`strictPort: true` 恒定不漂移）。**各子项目端口不同**，**切勿写死 1420** |
+| **浏览器调试（优先）** | aicoder 内置浏览器 —— `mcp__aicoder__browser_navigate(<devUrl>)`，`<devUrl>` 取上一行的实际地址 |
+| **浏览器调试（备选）** | MCP chrome-devtools —— 仅当 aicoder 未连接时回退，访问同一 `<devUrl>` |
 
-> **注意**：使用 chrome-devtools MCP 工具时，`navigate_page` / `new_page` 等操作的 URL 应指向 `http://localhost:1420`（Tauri 开发模式下的 Vite 前端服务端口）。
+> **注意**：需要在浏览器里调试 / 访问前端页面时，**优先用 aicoder 内置浏览器**（`browser_navigate` 导航 + `browser_snapshot` / `browser_console` / `browser_eval` 观察，`browser_click` / `browser_type` 交互）。目标 URL **必须以本项目 `src-tauri/tauri.conf.json` 的 `devUrl` 为准**，不要沿用别的项目端口——每个子项目的 dev 端口都不一样。仅当 aicoder MCP 未连接时，才回退到 chrome-devtools MCP（访问同一 `devUrl`）。
 
 ### 当前已安装的 Rust 依赖
 
