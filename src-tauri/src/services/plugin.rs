@@ -146,24 +146,25 @@ fn unique_dir(parent: &Path, base: &str) -> std::path::PathBuf {
 }
 
 fn manifest_template(name: &str) -> String {
-    // 注意：args 用 ${PLUGIN_DIR} 占位，安装时由主应用还原为插件目录绝对路径
-    let escaped_name = name.replace('"', "'");
-    format!(
-        r#"{{
-  "manifestVersion": 1,
-  "name": "{escaped_name}",
-  "description": "我的知识库插件（脚手架生成，请改成你的实现）",
-  "version": "1.0.0",
-  "author": "",
-  "homepage": "",
-  "mcp": {{
-    "command": "node",
-    "args": ["${{PLUGIN_DIR}}/server.mjs"],
-    "env": {{}}
-  }}
-}}
-"#
-    )
+    // 用 serde_json 构造，避免手拼字符串在 name 含 " / \ / 换行时生成非法 JSON。
+    // args 用 ${PLUGIN_DIR} 占位，安装时由主应用还原为插件目录绝对路径。
+    let manifest = PluginManifest {
+        manifest_version: 1,
+        name: name.trim().to_string(),
+        description: "我的知识库插件（脚手架生成，请改成你的实现）".to_string(),
+        version: "1.0.0".to_string(),
+        author: String::new(),
+        homepage: String::new(),
+        mcp: PluginMcp {
+            command: "node".to_string(),
+            args: vec!["${PLUGIN_DIR}/server.mjs".to_string()],
+            env: HashMap::new(),
+        },
+    };
+    // 固定结构体序列化不会失败；万一失败给个最小合法兜底，绝不写出非法/空清单
+    serde_json::to_string_pretty(&manifest)
+        .map(|s| format!("{s}\n"))
+        .unwrap_or_else(|_| "{\n  \"manifestVersion\": 1\n}\n".to_string())
 }
 
 fn package_template(safe: &str) -> String {

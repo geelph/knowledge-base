@@ -121,7 +121,12 @@ async function writeRichTextToClipboard(
     ]);
     return;
   }
-  await navigator.clipboard.writeText(plain);
+  // 极端降级：非安全上下文下 navigator.clipboard 可能整体缺失，判空避免 TypeError
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(plain);
+  } else {
+    throw new Error("当前环境不支持剪贴板写入");
+  }
 }
 
 /**
