@@ -8,17 +8,21 @@ use crate::state::AppState;
 ///
 /// - 每个文件独立抽取文本、创建笔记、拷贝原文件
 /// - 单个失败不影响其他，错误信息回填到 `error` 字段
+/// - `enable_ocr`（缺省 false）：扫描件（无文字层）时用本地 OCR 逐页识别兜底。
+///   OCR 较慢（逐页渲染 + 子进程推理）；async command 在 worker 线程执行，不冻结主线程 UI。
 #[tauri::command]
-pub fn import_pdfs(
+pub async fn import_pdfs(
     state: State<'_, AppState>,
     paths: Vec<String>,
     folder_id: Option<i64>,
+    enable_ocr: Option<bool>,
 ) -> Result<Vec<PdfImportResult>, String> {
     Ok(PdfService::import_many(
         &state.data_dir,
         &state.db,
         &paths,
         folder_id,
+        enable_ocr.unwrap_or(false),
     ))
 }
 

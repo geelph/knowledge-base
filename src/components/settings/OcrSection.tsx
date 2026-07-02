@@ -111,7 +111,7 @@ export function OcrSection() {
           <Alert
             type="info"
             showIcon
-            className="mb-3"
+            style={{ marginBottom: 16 }}
             message="离线本地识别（RapidOCR），支持中英文。识别图片文字，或把无文本层的扫描件 PDF 逐页转成文字。"
           />
           <Space wrap className="mb-3">

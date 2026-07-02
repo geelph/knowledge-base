@@ -6,7 +6,7 @@ import { List, Modal, Typography, message } from "antd";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { NavigateFunction } from "react-router-dom";
 
-import { noteApi, importApi, pdfApi, sourceFileApi, tagApi, folderApi } from "./api";
+import { noteApi, importApi, pdfApi, ocrApi, sourceFileApi, tagApi, folderApi } from "./api";
 import { importWordFiles } from "./wordImport";
 import { useAppStore } from "@/store";
 
@@ -220,36 +220,84 @@ export async function importPdfsFlow(
   if (paths.length === 0) return;
   const hide = message.loading(`正在导入 ${paths.length} 个 PDF...`, 0);
   try {
-    const results = await pdfApi.importPdfs(paths, folderId);
-    const ok = results.filter((r) => r.noteId !== null);
-    const fail = results.filter((r) => r.noteId === null);
+    // 第一遍：不 OCR（快，多数 PDF 有文字层）
+    const results = await pdfApi.importPdfs(paths, folderId, false);
     hide();
-    if (ok.length > 0) message.success(`成功导入 ${ok.length} 个 PDF`);
-    if (fail.length > 0) {
-      Modal.warning({
-        title: `${fail.length} 个 PDF 导入失败`,
-        content: (
-          <List
-            size="small"
-            dataSource={fail}
-            renderItem={(r) => (
-              <List.Item>
-                <Typography.Text type="danger" style={{ fontSize: 12 }}>
-                  {r.sourcePath.split(/[\\/]/).pop()}: {r.error}
-                </Typography.Text>
-              </List.Item>
-            )}
-          />
-        ),
+    const okIds: number[] = [];
+    for (const r of results) if (r.noteId != null) okIds.push(r.noteId);
+    const fail = results.filter((r) => r.noteId === null);
+    // 扫描件失败项：错误里带「扫描件」标记，可用本地 OCR 重试
+    const scanned = fail.filter((r) => (r.error ?? "").includes("扫描件"));
+
+    if (okIds.length > 0) message.success(`成功导入 ${okIds.length} 个 PDF`);
+
+    // 有扫描件 且 本地 OCR 引擎可用 → 问用户是否 OCR 重试
+    const ocrReady = await ocrApi.available().catch(() => false);
+    if (scanned.length > 0 && ocrReady) {
+      Modal.confirm({
+        title: `${scanned.length} 个是扫描件（无文字层）`,
+        content: `是否用内置本地 OCR 逐页识别后导入？OCR 较慢（每页约 0.1–1 秒），请耐心等待。`,
+        okText: "用 OCR 识别导入",
+        cancelText: "跳过这些",
+        onOk: async () => {
+          const h2 = message.loading(`正在 OCR 识别 ${scanned.length} 个扫描件…`, 0);
+          try {
+            const r2 = await pdfApi.importPdfs(
+              scanned.map((r) => r.sourcePath),
+              folderId,
+              true,
+            );
+            h2();
+            const ocrOk = r2.filter((r) => r.noteId != null);
+            const ocrFail = r2.filter((r) => r.noteId === null);
+            if (ocrOk.length > 0)
+              message.success(`OCR 成功导入 ${ocrOk.length} 个扫描件`);
+            if (ocrFail.length > 0) showPdfFailModal(ocrFail, "OCR 后仍失败");
+            useAppStore.getState().bumpNotesRefresh();
+            const ocrIds = ocrOk
+              .map((r) => r.noteId)
+              .filter((v): v is number => v != null);
+            navigateAfterImport(navigate, [...okIds, ...ocrIds], []);
+          } catch (e) {
+            h2();
+            message.error(`OCR 导入失败: ${e}`);
+          }
+        },
       });
+    } else if (fail.length > 0) {
+      // 无扫描件可 OCR，或引擎不可用 → 直接列失败清单
+      showPdfFailModal(fail, `${fail.length} 个 PDF 导入失败`);
     }
+
     useAppStore.getState().bumpNotesRefresh();
-    const ids = ok.map((r) => r.noteId).filter((v): v is number => v != null);
-    navigateAfterImport(navigate, ids, []);
+    navigateAfterImport(navigate, okIds, []);
   } catch (e) {
     hide();
     message.error(`导入失败: ${e}`);
   }
+}
+
+/** PDF 导入失败清单弹窗（抽出复用） */
+function showPdfFailModal(
+  fail: { sourcePath: string; error?: string | null }[],
+  title: string,
+): void {
+  Modal.warning({
+    title,
+    content: (
+      <List
+        size="small"
+        dataSource={fail}
+        renderItem={(r) => (
+          <List.Item>
+            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+              {r.sourcePath.split(/[\\/]/).pop()}: {r.error}
+            </Typography.Text>
+          </List.Item>
+        )}
+      />
+    ),
+  });
 }
 
 /** Word 导入流程：.doc 需本机装 LibreOffice / Office / WPS */

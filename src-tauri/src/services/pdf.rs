@@ -93,11 +93,16 @@ impl PdfService {
     }
 
     /// 把一个 PDF 文件导入为笔记：抽取文本 → 创建笔记 → 拷贝原文件 → 更新 pdf_path
+    ///
+    /// `enable_ocr`：扫描件（无文字层）时是否用本地 OCR 逐页识别兜底。
+    /// - true：检测到扫描件 → 渲染每页为图 → OCR 识别 → 用识别文本建笔记（慢，但能导入扫描件）。
+    /// - false：检测到扫描件 → 报错提示（保持旧行为，避免用户不知情地跑很慢的 OCR）。
     pub fn import_one(
         app_data_dir: &Path,
         db: &Database,
         source_path: &str,
         folder_id: Option<i64>,
+        enable_ocr: bool,
     ) -> Result<Note, AppError> {
         let source = Path::new(source_path);
         if !source.exists() {
@@ -110,16 +115,29 @@ impl PdfService {
         // 1. 抽取文本（扫描件 / 加密 PDF / xref 损坏会失败）
         //    对 xref 损坏类错误（如 CNKI 知网下载件）自动尝试修复后重试一次
         let raw_text = extract_text_with_repair(source)?;
-        let text = normalize_text(&raw_text);
+        let mut text = normalize_text(&raw_text);
 
         // T-B06: 抽出文字过少 → 多半是扫描件 / 图片型 PDF（无文字层）
         // 默认成功路径里 normalize 后再判断，避免 PDF 只有页码 / 页眉时被误判
         // 阈值 50 是经验值（空白/几页页码合计也常超 50；扫描件极少超过 50）
         if is_likely_scanned_pdf(&text) {
-            return Err(AppError::Custom(format!(
-                "PDF 抽出文字过少（仅 {} 字），多半是扫描件 / 图片型 PDF（无文字层）。当前版本不内置 OCR;建议先用 Adobe Acrobat、ABBYY、mineru 等工具把 PDF 转成可搜索文本后再导入。",
-                text.chars().count()
-            )));
+            // 扫描件：优先用本地 OCR 兜底（enable_ocr 且引擎可用），否则报错提示
+            #[cfg(desktop)]
+            if enable_ocr && crate::services::ocr::is_available() {
+                text = ocr_scanned_pdf(source)?;
+                if is_likely_scanned_pdf(&text) {
+                    return Err(AppError::Custom(
+                        "扫描件 OCR 后仍无有效文字（可能是空白页 / 图片清晰度不足）".into(),
+                    ));
+                }
+            } else {
+                return Err(scanned_pdf_error(&text, enable_ocr));
+            }
+            #[cfg(not(desktop))]
+            {
+                let _ = enable_ocr;
+                return Err(scanned_pdf_error(&text, false));
+            }
         }
 
         // 2. 标题取源文件名（去后缀）
@@ -163,16 +181,18 @@ impl PdfService {
         Ok(note)
     }
 
-    /// 批量导入，收集每条结果（不中断整体流程）
+    /// 批量导入，收集每条结果（不中断整体流程）。
+    /// `enable_ocr` 透传给 import_one：扫描件是否用本地 OCR 兜底。
     pub fn import_many(
         app_data_dir: &Path,
         db: &Database,
         source_paths: &[String],
         folder_id: Option<i64>,
+        enable_ocr: bool,
     ) -> Vec<PdfImportResult> {
         source_paths
             .iter()
-            .map(|p| match Self::import_one(app_data_dir, db, p, folder_id) {
+            .map(|p| match Self::import_one(app_data_dir, db, p, folder_id, enable_ocr) {
                 Ok(note) => PdfImportResult {
                     source_path: p.clone(),
                     note_id: Some(note.id),
@@ -341,6 +361,58 @@ fn extract_with_pdfium(source: &Path) -> Result<String, String> {
         pages_text.push(page_text.all());
     }
     Ok(pages_text.join("\n\n"))
+}
+
+/// 扫描件报错文案。`enable_ocr=false` 时提示可在设置开启 OCR / 或用外部工具。
+fn scanned_pdf_error(text: &str, ocr_requested: bool) -> AppError {
+    let n = text.chars().count();
+    if ocr_requested {
+        // 请求了 OCR 但引擎不可用（未随包分发 / 移动端）
+        AppError::Custom(format!(
+            "PDF 抽出文字过少（仅 {n} 字），是扫描件 / 图片型 PDF，但本地 OCR 引擎当前不可用。"
+        ))
+    } else {
+        AppError::Custom(format!(
+            "PDF 抽出文字过少（仅 {n} 字），多半是扫描件 / 图片型 PDF（无文字层）。\
+             可在导入时勾选「扫描件用 OCR 识别」用内置本地 OCR 逐页识别（较慢），\
+             或先用外部工具转成可搜索文本后再导入。"
+        ))
+    }
+}
+
+/// 扫描件 OCR 兜底：把 PDF 每页渲染成图 → 逐页本地 OCR → 用分页符拼接返回。
+/// 临时图放系统临时目录下独立子目录，识别完清理。仅桌面端（依赖 PDFium + OCR sidecar）。
+#[cfg(desktop)]
+fn ocr_scanned_pdf(source: &Path) -> Result<String, AppError> {
+    // 导入场景页数上限给宽一点（扫描书稿常几十页）；仍封顶防超大 PDF 卡死
+    const MAX_OCR_PAGES: usize = 100;
+    let tmp_root = std::env::temp_dir().join(format!(
+        "kb-pdf-ocr-{}",
+        source
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "doc".into())
+    ));
+
+    let pngs = render_pdf_to_pngs(source, &tmp_root, MAX_OCR_PAGES).map_err(AppError::Custom)?;
+    if pngs.is_empty() {
+        let _ = std::fs::remove_dir_all(&tmp_root);
+        return Err(AppError::Custom("PDF 没有可渲染的页面".into()));
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    for (i, png) in pngs.iter().enumerate() {
+        match crate::services::ocr::recognize_image(png) {
+            Ok(t) if !t.trim().is_empty() => {
+                parts.push(format!("<!-- 第 {} 页 -->\n{}", i + 1, t));
+            }
+            Ok(_) => {} // 空页跳过
+            Err(e) => log::warn!("[pdf-ocr] 第 {} 页识别失败: {}", i + 1, e),
+        }
+        let _ = std::fs::remove_file(png);
+    }
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    Ok(parts.join("\n\n"))
 }
 
 /// 把 PDF 每页渲染成 PNG 写到 `out_dir`，返回生成的 PNG 路径（按页序）。
