@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, Typography, Descriptions, Spin, message, Button, Tooltip, Tag } from "antd";
+import { Card, Typography, Descriptions, Spin, message, Button, Tooltip, Tag, Image } from "antd";
 import { SyncOutlined, SettingOutlined } from "@ant-design/icons";
 import { FolderOpen, ExternalLink } from "lucide-react";
 import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -321,19 +321,27 @@ export default function AboutPage() {
       {/* 赞赏支持：本应用完全开源免费，扫码请作者喝杯咖啡 ☕ */}
       <Card id="about-sponsor" title="赞赏支持">
         <div className="flex items-center gap-6 flex-wrap">
-          <img
-            src="/donate-qr.png"
-            alt="赞赏码"
-            style={{
-              width: 200,
-              height: 200,
-              objectFit: "contain",
-              borderRadius: 8,
-              background: "#fff",
-              padding: 4,
-              border: "1px solid #f0f0f0",
-            }}
-          />
+          <div className="flex flex-col items-center gap-1">
+            <Image
+              src="/donate-qr.png"
+              alt="赞赏码"
+              width={280}
+              height={280}
+              style={{
+                objectFit: "contain",
+                borderRadius: 8,
+                background: "#fff",
+                padding: 8,
+                border: "1px solid #f0f0f0",
+                cursor: "zoom-in",
+              }}
+              // Ant Design Image 自带点击预览：点开可全屏放大 / 缩放，方便扫码
+              preview={{ mask: "点击放大扫码" }}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              点击图片可放大扫码
+            </Text>
+          </div>
           <div className="flex-1 min-w-[200px]">
             <Title level={5} style={{ marginTop: 0 }}>
               如果这款工具帮到了你 ❤️
