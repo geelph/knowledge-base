@@ -9,6 +9,7 @@ pub mod notes;
 pub mod prompt;
 pub mod push;
 pub mod schema;
+pub mod scripts;
 pub mod search;
 pub mod sync;
 pub mod sync_v1;

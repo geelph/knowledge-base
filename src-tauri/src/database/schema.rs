@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::error::AppError;
 
 /// 当前 Schema 版本
-pub const SCHEMA_VERSION: i32 = 47;
+pub const SCHEMA_VERSION: i32 = 48;
 
 /// 获取数据库版本
 pub fn get_version(conn: &Connection) -> Result<i32, AppError> {
@@ -77,6 +77,7 @@ pub fn migrate(conn: &Connection) -> Result<(), AppError> {
             44 => migrate_v44_to_v45(conn)?,
             45 => migrate_v45_to_v46(conn)?,
             46 => migrate_v46_to_v47(conn)?,
+            47 => migrate_v47_to_v48(conn)?,
             _ => {
                 return Err(AppError::Custom(format!("未知的数据库版本: {}", version)));
             }
@@ -1872,6 +1873,30 @@ fn migrate_v44_to_v45(conn: &Connection) -> Result<(), AppError> {
     )?;
 
     set_version(conn, 45)?;
+    Ok(())
+}
+
+fn migrate_v47_to_v48(conn: &Connection) -> Result<(), AppError> {
+    log::info!("数据库迁移: v47 -> v48 (#8 Phase 2 脚本插件 scripts)");
+
+    // 脚本插件（Rhai 文本转换脚本）。kind 预留扩展（当前只有 transform：input 字符串 → 输出字符串）。
+    // code 是 Rhai 源码；trigger 供前端归类（selection = 作用于选中文本 / note = 整篇）。
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS scripts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            kind        TEXT NOT NULL DEFAULT 'transform',
+            trigger     TEXT NOT NULL DEFAULT 'selection',
+            code        TEXT NOT NULL DEFAULT '',
+            enabled     INTEGER NOT NULL DEFAULT 1,
+            created_at  DATETIME DEFAULT (datetime('now','localtime')),
+            updated_at  DATETIME DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_scripts_enabled ON scripts(enabled, name);",
+    )?;
+
+    set_version(conn, 48)?;
     Ok(())
 }
 

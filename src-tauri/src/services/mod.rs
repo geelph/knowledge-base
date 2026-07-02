@@ -45,6 +45,7 @@ pub mod popout_window;
 pub mod dataview;
 pub mod plugin;
 pub mod project;
+pub mod script;
 pub mod prompt;
 pub mod push;
 pub mod quick_capture;

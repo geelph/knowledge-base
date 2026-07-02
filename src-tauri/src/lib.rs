@@ -906,6 +906,14 @@ pub fn run() {
             commands::mcp::plugin_install_from_manifest,
             commands::mcp::plugin_install_from_file,
             commands::mcp::plugin_scaffold,
+            // #8 Phase 2 脚本插件（Rhai 文本转换）
+            commands::script::script_list,
+            commands::script::script_create,
+            commands::script::script_update,
+            commands::script::script_delete,
+            commands::script::script_set_enabled,
+            commands::script::script_run_preview,
+            commands::script::script_run,
             // 外部 MCP server 子进程仅桌面端
             #[cfg(desktop)]
             commands::mcp::mcp_external_list_tools,

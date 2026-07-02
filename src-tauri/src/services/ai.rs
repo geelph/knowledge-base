@@ -3193,7 +3193,9 @@ fn truncate_for_attachment(text: &str, limit: usize) -> (String, bool) {
         count - limit,
         limit
     );
-    (kept + &tail, true)
+    // 用 .as_str() 明确走 String + &str：rhai 依赖的 smartstring 也给 String 加了
+    // Add<SmartString> impl，裸 `kept + &tail`(String+&String) 会因多候选而歧义。
+    (kept + tail.as_str(), true)
 }
 
 /// 把附件 markdown 拼到 user message 前面发给 AI。
